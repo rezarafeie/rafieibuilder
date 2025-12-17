@@ -57,7 +57,7 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
     if (config.id === 'google') {
         const ai = new GoogleGenAI({ apiKey: config.apiKey });
         const reqConfig: any = { 
-            systemInstruction: "ACT AS A HEADLESS API. RETURN ONLY PURE JSON. NO MARKDOWN. NO PREAMBLE. NO INSTRUCTIONS. NO CLI COMMANDS. NO 'RUN NPM'. YOU ARE A CODE GENERATOR, NOT A TUTOR.\n\n" + systemInstruction, 
+            systemInstruction: "ACT AS A HEADLESS CODE GENERATION API. RETURN ONLY PURE JSON. NO MARKDOWN. NO CHAT. NO INSTRUCTIONS. NO 'RUN NPM'. NO 'INSTALL'.\n\n" + systemInstruction, 
             temperature: 0.1, 
             maxOutputTokens: 8192 
         };
@@ -137,30 +137,12 @@ const robustGenerate = async (prompt: string, systemInstruction: string, project
 
 const extractJson = (text: string | undefined): any => {
     if (!text) throw new Error("Empty response from AI");
-    
-    // Cleanup markdown if present
     let cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
-
     const tryParse = (str: string) => {
         try { return JSON.parse(str); } catch (e) { return null; }
     };
-
-    // First pass: try whole string
     let res = tryParse(cleaned);
     if (res) return res;
-
-    // Second pass: Find first/last brace matches
-    const startBrace = cleaned.indexOf('{');
-    const startBracket = cleaned.indexOf('[');
-    const start = (startBrace !== -1 && (startBracket === -1 || startBrace < startBracket)) ? startBrace : startBracket;
-    const end = Math.max(cleaned.lastIndexOf('}'), cleaned.lastIndexOf(']'));
-
-    if (start !== -1 && end !== -1 && end > start) {
-        res = tryParse(cleaned.substring(start, end + 1));
-        if (res) return res;
-    }
-
-    // Third pass: Regex match for blocks
     const blocks = cleaned.match(/\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}|\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]/g);
     if (blocks) {
         for (let i = blocks.length - 1; i >= 0; i--) {
@@ -168,20 +150,26 @@ const extractJson = (text: string | undefined): any => {
             if (res) return res;
         }
     }
-
-    console.error("JSON_PARSE_FAILURE. Raw:", text);
-    throw new Error("AI returned data in an invalid format. Please try again.");
+    const startBrace = cleaned.indexOf('{');
+    const startBracket = cleaned.indexOf('[');
+    const start = (startBrace !== -1 && (startBracket === -1 || startBrace < startBracket)) ? startBrace : startBracket;
+    const end = Math.max(cleaned.lastIndexOf('}'), cleaned.lastIndexOf(']'));
+    if (start !== -1 && end !== -1 && end > start) {
+        res = tryParse(cleaned.substring(start, end + 1));
+        if (res) return res;
+    }
+    throw new Error("AI returned invalid data format. Please retry.");
 };
 
 export const PROMPT_KEYS = {
-    'DECISION': 'sys_prompt_decision_v10', 
-    'REQUIREMENTS': 'sys_prompt_requirements_v10',
-    'PHASE_PLANNER': 'sys_prompt_phase_planner_v10', 
-    'DESIGN': 'sys_prompt_design_v10',
-    'PLANNER': 'sys_prompt_planner_v10', 
-    'BUILDER': 'sys_prompt_builder_v10', 
-    'REPAIR_PLANNER': 'sys_prompt_repair_planner_v10',
-    'TITLE': 'sys_prompt_title_v10'
+    'DECISION': 'sys_prompt_decision_v11', 
+    'REQUIREMENTS': 'sys_prompt_requirements_v11',
+    'PHASE_PLANNER': 'sys_prompt_phase_planner_v11', 
+    'DESIGN': 'sys_prompt_design_v11',
+    'PLANNER': 'sys_prompt_planner_v11', 
+    'BUILDER': 'sys_prompt_builder_v11', 
+    'REPAIR_PLANNER': 'sys_prompt_repair_planner_v11',
+    'TITLE': 'sys_prompt_title_v11'
 };
 
 export const DEFAULTS = {
@@ -189,22 +177,24 @@ export const DEFAULTS = {
 
     REQUIREMENTS: `Return ONLY JSON: {"needs_backend": boolean, "reasoning": "...", "features": []}`,
 
-    PHASE_PLANNER: `Role: React/Tailwind Architect.
-Rule: NEVER plan for environment setup or 'npm install'. ONLY plan for file creation.
-Return ONLY JSON: {"phases": [{"title": "Skeleton", "goal": "Setup src/App.tsx and core routes", "type": "skeleton"}, {"title": "UI Components", "goal": "Build visual elements", "type": "ui"}]}`,
+    PHASE_PLANNER: `Role: React Architect.
+Rule: NEVER output environment setup steps. NO 'npm install'. NO 'cd project'. 
+ONLY output high-level build phases.
+Return ONLY JSON: {"phases": [{"title": "Skeleton", "goal": "Base structure", "type": "skeleton"}, {"title": "UI Components", "goal": "Visuals", "type": "ui"}]}`,
 
-    DESIGN: `Return ONLY JSON: {"design_language": "modern", "pages": [{"route": "/", "sections": []}], "visual_spec": "{}"}`,
+    DESIGN: `Return ONLY JSON: {"design_language": "modern", "pages": [], "visual_spec": "{}"}`,
 
-    PLANNER: `Rule: Break the phase into atomic file creation steps.
-Return ONLY JSON: {"steps": [{"title": "Create Header", "path": "src/components/Header.tsx", "description": "Implement responsive navigation"}]}`,
+    PLANNER: `Role: Technical Lead. 
+Break the current phase into specific file paths to be created or updated.
+Return ONLY JSON: {"steps": [{"title": "Create Header", "path": "src/components/Header.tsx", "description": "Implement navigation bar"}]}`,
 
-    BUILDER: `Role: Expert React + Tailwind Developer. 
-Rule: Output COMPLETE, usable file content. NO placeholders. NO commentary. NO CLI commands.
-Return ONLY JSON: {"file_changes": [{"path": "src/App.tsx", "content": "import React from 'react';\n\nexport default function App() { ... }"}]}`,
+    BUILDER: `Role: Headless Coder.
+Rule: Provide FULL file content. NO commentary. NO placeholders.
+Return ONLY JSON: {"file_changes": [{"path": "src/App.tsx", "content": "import React from 'react';..."}]}`,
 
     REPAIR_PLANNER: `Return ONLY JSON: {"patches": [{"path": "...", "content": "..."}], "explanation": "..."}`,
 
-    TITLE: `Return ONLY JSON: {"title": "Catchy App Name"}`
+    TITLE: `Return ONLY JSON: {"title": "App Name"}`
 };
 
 export interface SupervisorCallbacks {
@@ -278,7 +268,7 @@ export class GenerationSupervisor {
             
             // 1. DECISION
             const decisionMsgId = (await this.callbacks.onBuildMessage('decision', { type: 'build_status', content: this.t('analyzingRequest'), status: 'working', icon: 'loader' })).id;
-            const decisionRes = await this.runStep(PROMPT_KEYS['DECISION'], `USER: ${this.userPrompt}\nFILES: ${this.accumulatedFiles.map(f=>f.path).join(',')}`, DEFAULTS.DECISION, decisionMsgId);
+            const decisionRes = await this.runStep(PROMPT_KEYS['DECISION'], `USER: ${this.userPrompt}`, DEFAULTS.DECISION, decisionMsgId);
             const decision = decisionRes.json;
             const intent = decision.analysis.intent;
 
@@ -318,7 +308,7 @@ export class GenerationSupervisor {
                 const phaseMsgId = (await this.callbacks.onBuildMessage(`phase_${i}`, { type: 'build_phase', content: this.t('startingPhase', {phaseTitle: phase.title}), status: 'working', icon: 'loader' })).id;
                 await this.callbacks.onPhaseStart(i, { text: phase.title });
                 
-                const detailedPlanRes = await this.runStep(PROMPT_KEYS['PLANNER'], JSON.stringify({ phase, prompt: this.userPrompt }), DEFAULTS.PLANNER, phaseMsgId);
+                const detailedPlanRes = await this.runStep(PROMPT_KEYS['PLANNER'], JSON.stringify({ phase, prompt: this.userPrompt, current_files: this.accumulatedFiles.map(f=>f.path) }), DEFAULTS.PLANNER, phaseMsgId);
                 const steps = detailedPlanRes.json.steps || [];
 
                 for (let j = 0; j < steps.length; j++) {
@@ -337,7 +327,7 @@ export class GenerationSupervisor {
                             else this.accumulatedFiles.push({ path: change.path, content, type: 'file' });
                         }
                     }
-                    await this.callbacks.onChunkComplete({ html: '', javascript: '', css: '', explanation: `Built ${step.path}` }, `Updated ${step.path}`, { files: this.accumulatedFiles });
+                    await this.callbacks.onChunkComplete({ html: '', javascript: '', css: '', explanation: `Built ${step.path}` }, `Built ${step.path}`, { files: this.accumulatedFiles });
                     await this.callbacks.onBuildMessage(`phase_${i}_step_${j}`, { id: stepMsgId, status: 'completed', icon: 'check' });
                 }
                 phase.status = 'completed';
@@ -349,14 +339,13 @@ export class GenerationSupervisor {
             await this.callbacks.onSuccess(this.project.code, successMsg, { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
 
         } catch (e: any) {
-            console.error("Supervisor Critical Failure:", e);
+            console.error("Supervisor Failure:", e);
             await this.callbacks.onFinalError(e.message);
         }
     }
 
     public async repair(error: string) {
-        // Simple repair bridge
-        const msgId = (await this.callbacks.onBuildMessage('repair', { type: 'build_status', content: "Fixing runtime error...", status: 'working', icon: 'wrench' })).id;
+        const msgId = (await this.callbacks.onBuildMessage('repair', { type: 'build_status', content: "Self-healing in progress...", status: 'working', icon: 'wrench' })).id;
         try {
             const res = await this.runStep(PROMPT_KEYS['REPAIR_PLANNER'], JSON.stringify({ error, files: this.accumulatedFiles.map(f=>({path: f.path, content: f.content.substring(0, 500)})) }), DEFAULTS.REPAIR_PLANNER, msgId);
             if (res.json.patches) {
@@ -369,19 +358,25 @@ export class GenerationSupervisor {
             await this.callbacks.onBuildMessage('repair', { id: msgId, status: 'completed', icon: 'check' });
             await this.callbacks.onSuccess(this.project.code, "Repair complete.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
         } catch (e: any) {
-            await this.callbacks.onBuildMessage('repair', { id: msgId, content: "Repair failed: " + e.message, status: 'failed', icon: 'x' });
+            await this.callbacks.onBuildMessage('repair', { id: msgId, content: "Repair failed", status: 'failed', icon: 'x' });
         }
     }
 }
 
-export const handleUserIntent = async (project: Project, prompt: string) => ({ isArchitect: true });
-
 export const generateProjectTitle = async (prompt: string, user: User, project: Project): Promise<string> => {
     try {
-        const { text } = await robustGenerate(`Prompt: ${prompt}`, DEFAULTS.TITLE, project.id, user.id, 'TITLE');
-        const json = extractJson(text);
-        return json.title || "My AI App";
+        const ai = new GoogleGenAI({ apiKey: DEFAULT_GEMINI_KEY });
+        const res = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: `Generate a short (2-3 words) catchy project name for this app: "${prompt}"`,
+            config: { 
+                systemInstruction: "RETURN ONLY THE TITLE. NO QUOTES. NO CHAT.",
+                temperature: 0.7 
+            }
+        });
+        return res.text?.trim() || "My AI App";
     } catch (e) { return "New Project"; }
 };
 
+export const handleUserIntent = async (project: Project, prompt: string) => ({ isArchitect: true });
 export const generateSuggestions = async (msgs: Message[], code: GeneratedCode, id: string) => [];
