@@ -113,7 +113,6 @@ export const cloudService = {
     },
 
     async saveProject(project: Project): Promise<void> {
-        // @fix: Corrected property access from build_state to buildState.
         const payload = {
             id: project.id, user_id: project.userId, name: project.name, updated_at: new Date().toISOString(),
             code: project.code, files: project.files, messages: project.messages, build_state: project.buildState,
@@ -200,7 +199,7 @@ export const cloudService = {
             }
             
             updateLocalState({ messages: updatedMessages });
-            this.saveProject(currentProject).catch(console.error); // Immediate non-blocking save
+            this.saveProject(currentProject).catch(console.error);
             return updatedMessages.find(m => m.id === msgId)!;
         };
 
@@ -232,33 +231,63 @@ export const cloudService = {
                 updateLocalState({ code, status: 'idle', files: meta?.files || currentProject.files }); 
                 this.saveProject(currentProject).catch(console.error);
             },
-            onError: async (err, retries) => {
-                await createOrUpdateBuildMessage(`error_${Date.now()}`, { type: 'build_status', content: `Retry Attempt ${3-retries}: ${err}`, status: 'working' });
+            onError: async (err) => {
+                if (err !== "ABORTED") {
+                   await createOrUpdateBuildMessage(`log_${Date.now()}`, { type: 'build_status', content: `Error encountered: ${err}`, status: 'failed' });
+                }
             },
             onFinalError: async (err) => { 
-                updateLocalState({ status: 'failed' }); 
-                await createOrUpdateBuildMessage('fatal_error', { type: 'build_error', content: `Fatal Error: ${err}`, status: 'failed', icon: 'alert-triangle' });
-                this.saveProject(currentProject).catch(console.error);
+                if (err !== "ABORTED") {
+                    updateLocalState({ status: 'failed' }); 
+                    await createOrUpdateBuildMessage('fatal_error', { type: 'build_error', content: `The build process encountered an error: ${err}. Please try again or adjust your prompt.`, status: 'failed', icon: 'alert-triangle' });
+                    this.saveProject(currentProject).catch(console.error);
+                }
             }
         }, signal, lang as Language);
 
         supervisor.start(isResume).catch(async (e) => {
-             await createOrUpdateBuildMessage('orchestrator_crash', { type: 'build_error', content: `Orchestrator Crash: ${e.message}`, status: 'failed' });
+             if (e.message !== "ABORTED") {
+                await createOrUpdateBuildMessage('orchestrator_crash', { type: 'build_error', content: `Build process interrupted: ${e.message}`, status: 'failed' });
+             }
         });
     },
 
     async triggerRepair(project: Project, error: string, onUpdate: (p: Project, meta?: any) => void, waitForPreview: any) {
         if (this.abortController) this.abortController.abort();
         this.abortController = new AbortController();
-        const supervisor = new GenerationSupervisor(project, "", [], {
-            onBuildMessage: async (k, m) => { return m as Message; },
-            onChunkComplete: async (c, e, m) => onUpdate({ ...project, files: m?.files }),
-            onSuccess: async () => onUpdate({ ...project, status: 'idle' }),
-            onFinalError: async () => onUpdate({ ...project, status: 'failed' }),
+        const signal = this.abortController.signal;
+        
+        let currentProject = { ...project };
+        const updateLocalState = (updates: Partial<Project>, meta?: any) => {
+            currentProject = { ...currentProject, ...updates };
+            onUpdate(currentProject, meta);
+            return currentProject;
+        };
+
+        const supervisor = new GenerationSupervisor(currentProject, "", [], {
+            onBuildMessage: async (k, m) => { 
+                // Minimal implementation for repair status messages
+                const msgId = crypto.randomUUID();
+                const updatedMessages = [...currentProject.messages, { id: msgId, role: 'assistant', timestamp: Date.now(), ...m } as Message];
+                updateLocalState({ messages: updatedMessages });
+                return updatedMessages[updatedMessages.length - 1]; 
+            },
+            onChunkComplete: async (c, e, m) => {
+                // Ensure we merge files correctly
+                updateLocalState({ files: m?.files || currentProject.files });
+            },
+            onSuccess: async (code, exp, audit, meta) => {
+                updateLocalState({ status: 'idle', files: meta?.files || currentProject.files });
+                this.saveProject(currentProject).catch(console.error);
+            },
+            onFinalError: async (err) => {
+                updateLocalState({ status: 'failed' });
+            },
             onPlanUpdate: async () => {}, onMessage: async () => {}, onPhaseStart: async () => {}, onPhaseComplete: async () => {}, onStepStart: async () => {}, onStepComplete: async () => {}, onError: async () => {},
             waitForPreview
-        }, this.abortController.signal);
-        supervisor.repair(error);
+        }, signal);
+
+        supervisor.repair(error).catch(console.error);
     },
 
     stopBuild(projectId: string) { if (this.abortController) { this.abortController.abort(); this.abortController = null; } },

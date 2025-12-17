@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { User, Project, SystemLog, AdminMetric, FinancialStats, CreditLedgerEntry, WebhookLog, AIProviderConfig, AIProviderId } from '../types';
 import { cloudService, supabase } from '../services/cloudService';
@@ -23,7 +22,8 @@ interface AdminPanelProps {
 type AdminView = 'dashboard' | 'financials' | 'users' | 'projects' | 'ai' | 'webhooks' | 'errors' | 'settings' | 'database';
 
 // Helper to safely extract error message from unknown catch variable
-const getErrorMessage = (e: any): string => {
+// Updated signature to take unknown type for better compatibility with strict catch variables
+const getErrorMessage = (e: unknown): string => {
     if (typeof e === 'string') return e;
     if (e instanceof Error) return e.message;
     if (e && typeof e === 'object') {
@@ -166,10 +166,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                 });
                 setPrompts(loadedPrompts);
             }
-        // @fix: Changed catch(err: unknown) to catch(err: any) to fix "unknown not assignable to string" error on line 202.
+        // Change err from unknown to any to resolve potential strict assignment errors on line 173-176
         } catch (err: any) {
-            console.error("View load failed", getErrorMessage(err));
-            setDataError(getErrorMessage(err));
+            const msg = getErrorMessage(err);
+            console.error("View load failed", msg);
+            setDataError(msg);
         } finally {
             setIsLoading(false);
         }
@@ -187,7 +188,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                 { label: 'System Health', value: 'Optimal', status: 'good' },
                 { label: 'Active Issues', value: errorCount || 0, status: errorCount && errorCount > 0 ? 'warning' : 'good' }
             ]);
-        // @fix: Explicitly type catch variable as any to avoid unknown issues during logging.
+        // Use any in catch block to ensure compatibility with getErrorMessage call on line 196
         } catch (e: any) {
             console.error(getErrorMessage(e));
         }
@@ -203,7 +204,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                 }
             }
             alert("Prompts saved successfully!");
-        // @fix: Changed catch(err: unknown) to any for simpler string concatenation in alert.
+        // Use any in catch block to ensure compatibility with getErrorMessage call on line 212
         } catch (err: any) {
             alert("Save failed: " + getErrorMessage(err));
         } finally {
@@ -222,7 +223,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
             setAdjustmentNote('');
             setTargetUser(null);
             loadViewData();
-        // @fix: Using any in catch to safely concatenate error message.
+        // Use any in catch block to ensure compatibility with getErrorMessage call on line 233
         } catch (err: any) {
             alert("Adjustment failed: " + getErrorMessage(err));
         } finally {

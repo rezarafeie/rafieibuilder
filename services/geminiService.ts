@@ -1,3 +1,4 @@
+
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from '@supabase/supabase-js';
 import { GeneratedCode, Message, Project, Phase, BuildAudit, AIProviderConfig, AIUsageResult, ProjectFile, User, AIDebugLog } from "../types";
@@ -54,7 +55,6 @@ Output ONLY raw JSON:
   "phases": [ { "title": "Milestone Name", "goal": "Description", "type": "ui" } ]
 }`,
     'PLANNER': `Create a list of specific file implementation steps for the CURRENT phase.
-CRITICAL: index.html is the root shell. src/main.tsx is the React entry. 
 Output ONLY raw JSON:
 {
   "steps": [ { "title": "Step Name", "path": "src/App.tsx", "description": "Details", "is_entry": true } ]
@@ -64,11 +64,13 @@ Output ONLY raw JSON:
 {
   "file_changes": [ { "path": "string", "content": "Full React/Tailwind Code", "action": "create" } ]
 }`,
-    'REPAIR_PLANNER': `Analyze the error and provide a fix.
+    'REPAIR_PLANNER': `Analyze the provided error and existing file contents. 
+Provide surgical fixes (patches) for the problematic files. 
+DO NOT rewrite the whole project. Only provide content for files that actually need a fix.
 Output ONLY raw JSON:
 {
-  "patches": [ { "path": "string", "content": "Fixed code", "action": "update" } ],
-  "explanation": "Summary"
+  "patches": [ { "path": "string", "content": "Full Fixed code for this file", "action": "update" } ],
+  "explanation": "Summary of the fix"
 }`,
     'TITLE': `Generate a creative 2-word app name.
 Output ONLY raw JSON:
@@ -93,28 +95,17 @@ const getSystemPrompt = async (key: string): Promise<string> => {
 // --- ROBUST JSON EXTRACTION ---
 const extractJson = (text: string | undefined): any => {
     if (!text) throw new Error("AI returned empty response");
-
-    // 1. Remove XML/Thinking tags if model is Gemini 3
     let cleaned = text.replace(/<thought>[\s\S]*?<\/thought>/gi, "").trim();
-    
-    // 2. Remove basic markdown wrappers
     cleaned = cleaned.replace(/```json/gi, "").replace(/```/g, "").trim();
-
-    const tryParse = (str: string) => {
-        try { return JSON.parse(str); } catch (e) { return null; }
-    };
-
+    const tryParse = (str: string) => { try { return JSON.parse(str); } catch (e) { return null; } };
     let res = tryParse(cleaned);
     if (res) return res;
-
-    // 3. Regex extraction for first { to last }
     const firstBrace = cleaned.indexOf('{');
     const lastBrace = cleaned.lastIndexOf('}');
     if (firstBrace !== -1 && lastBrace > firstBrace) {
         res = tryParse(cleaned.substring(firstBrace, lastBrace + 1));
         if (res) return res;
     }
-
     throw new Error("Invalid AI Response Format: Could not find parseable JSON.");
 };
 
@@ -123,26 +114,22 @@ const getActiveProvider = async (): Promise<AIProviderConfig> => {
     try {
         const active = await aiProviderService.getActiveConfig();
         if (active && active.apiKey) return active;
+        
         const fallback = await aiProviderService.getFallbackConfig();
         if (fallback && fallback.apiKey) return fallback;
-    } catch (e) {}
-    return { id: 'google', name: 'Google Gemini', isActive: true, isFallback: false, apiKey: process.env.API_KEY || '', model: 'gemini-3-flash-preview', updatedAt: Date.now() };
+    } catch (e) {
+        console.warn("Could not fetch AI provider from database. Falling back to system default.");
+    }
+    return { id: 'google', name: 'Google Gemini (System)', isActive: true, isFallback: false, apiKey: process.env.API_KEY || '', model: 'gemini-3-flash-preview', updatedAt: Date.now() };
 };
 
 const executeAIRequest = async (config: AIProviderConfig, prompt: string, systemInstruction: string, images: string[] = []): Promise<{ text: string, usage: AIUsageResult }> => {
-    if (!config.apiKey) throw new Error(`API Key missing for ${config.name}`);
+    if (!config.apiKey) throw new Error(`AI configuration for ${config.name} is missing an API Key. Please update it in the Admin Panel.`);
 
     if (config.id === 'google') {
         const ai = new GoogleGenAI({ apiKey: config.apiKey });
-        const reqConfig: any = { 
-            systemInstruction, 
-            temperature: 0.1, 
-            maxOutputTokens: 8192 
-        };
-        
-        if (systemInstruction.toUpperCase().includes('JSON')) {
-            reqConfig.responseMimeType = 'application/json';
-        }
+        const reqConfig: any = { systemInstruction, temperature: 0.1, maxOutputTokens: 8192 };
+        if (systemInstruction.toUpperCase().includes('JSON')) reqConfig.responseMimeType = 'application/json';
         
         let contents: any = prompt;
         if (images.length > 0) {
@@ -181,7 +168,7 @@ const robustGenerate = async (prompt: string, systemInstruction: string, project
         return result;
     } catch (error: any) {
         const fallback = await aiProviderService.getFallbackConfig();
-        if (fallback && fallback.apiKey) {
+        if (fallback && fallback.apiKey && fallback.id !== activeConfig.id) {
             const result = await executeAIRequest(fallback, prompt, systemInstruction, images);
             billingService.chargeUser(userId, projectId, `${opType}_fallback`, result.usage.model, { promptTokenCount: result.usage.promptTokens, candidatesTokenCount: result.usage.completionTokens, costUsd: result.usage.costUsd }, { messageId: options?.messageId, note: "Fallback" }).catch(console.error);
             return result;
@@ -214,6 +201,7 @@ export class GenerationSupervisor {
     private signal?: AbortSignal;
     private lang: Language;
     private accumulatedFiles: ProjectFile[] = [];
+    private entryPath: string | null = null;
 
     constructor(project: Project, userPrompt: string, images: string[], callbacks: SupervisorCallbacks, signal?: AbortSignal, lang: Language = 'en') {
         this.project = project;
@@ -234,60 +222,27 @@ export class GenerationSupervisor {
             sys = "IMPORTANT: User-facing text in JSON MUST be in Farsi.\n" + sys;
         }
 
-        let lastError;
-        for (let i = 0; i < 3; i++) {
-            this.checkAbort();
-            try {
-                const { text, usage } = await robustGenerate(prompt, sys, this.project.id, this.project.userId, key, this.images, {messageId: logicalMessageKey});
-                
-                if (this.callbacks.onAIDebugLog) {
-                    this.callbacks.onAIDebugLog({
-                        id: crypto.randomUUID(), timestamp: Date.now(), stepKey: key, model: usage.model,
-                        systemInstruction: sys, prompt, response: text
-                    }, logicalMessageKey);
-                }
-
-                return extractJson(text);
-            } catch (e: any) {
-                lastError = e;
-                await this.callbacks.onError(e.message, 2 - i);
-                await new Promise(r => setTimeout(r, 1500));
+        this.checkAbort();
+        try {
+            const { text, usage } = await robustGenerate(prompt, sys, this.project.id, this.project.userId, key, this.images, {messageId: logicalMessageKey});
+            
+            if (this.callbacks.onAIDebugLog) {
+                this.callbacks.onAIDebugLog({
+                    id: crypto.randomUUID(), timestamp: Date.now(), stepKey: key, model: usage.model,
+                    systemInstruction: sys, prompt, response: text
+                }, logicalMessageKey);
             }
-        }
-        throw lastError;
-    }
 
-    private seedInitialFiles() {
-        const hasIndexHtml = this.accumulatedFiles.some(f => f.path === 'index.html');
-        const hasMainTsx = this.accumulatedFiles.some(f => f.path === 'src/main.tsx' || f.path === 'src/index.tsx');
-
-        if (!hasIndexHtml) {
-            this.accumulatedFiles.push({
-                path: 'index.html',
-                content: `<!DOCTYPE html><html><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>App</title><script src="https://cdn.tailwindcss.com"></script></head><body><div id="root"></div></body></html>`,
-                type: 'file',
-                language: 'html'
-            });
-        }
-
-        if (!hasMainTsx) {
-            this.accumulatedFiles.push({
-                path: 'src/main.tsx',
-                content: `import React from "react";\nimport { createRoot } from "react-dom/client";\nimport App from "./App";\n\nconst el = document.getElementById("root");\nif (el) createRoot(el).render(<React.StrictMode><App /></React.StrictMode>);`,
-                type: 'file',
-                language: 'typescript'
-            });
+            return extractJson(text);
+        } catch (e: any) {
+            if (e.message === "ABORTED") throw e;
+            throw e;
         }
     }
 
     public async start(isResume: boolean = false) {
         try {
             this.checkAbort();
-
-            // FORCE SEED for first build
-            if (!isResume && this.accumulatedFiles.length <= 1) {
-                this.seedInitialFiles();
-            }
             
             // 1. CLASSIFIER
             const classMsgId = (await this.callbacks.onBuildMessage('classifier', { type: 'build_status', content: "Strategizing approach...", status: 'working', icon: 'loader' })).id;
@@ -299,15 +254,15 @@ export class GenerationSupervisor {
                 return;
             }
 
-            // Mark classification as finished
-            await this.callbacks.onBuildMessage('classifier', { id: classMsgId, content: "Request classified for build. Designing architecture...", status: 'completed' });
+            // Close classification and start design
+            await this.callbacks.onBuildMessage('classifier', { id: classMsgId, status: 'completed', content: "Strategy defined." });
 
             // 2. DESIGN & ARCHITECTURE
             const designMsgId = (await this.callbacks.onBuildMessage('design', { type: 'build_status', content: "Designing architecture...", status: 'working', icon: 'loader' })).id;
             const designSpec = await this.runStep('DESIGN', `Request: ${this.userPrompt}\nFiles: ${this.accumulatedFiles.map(f=>f.path).join(',')}`, designMsgId);
             
-            // Mark design as finished
-            await this.callbacks.onBuildMessage('design', { id: designMsgId, content: `Design architecture finalized with ${designSpec.pages?.length || 1} pages planned.`, status: 'completed' });
+            // Close design and start phase planning
+            await this.callbacks.onBuildMessage('design', { id: designMsgId, status: 'completed', content: "Architecture designed." });
 
             // 3. PHASE PLANNING
             const phasePlanMsgId = (await this.callbacks.onBuildMessage('phases_planning', { type: 'build_status', content: "Planning milestones...", status: 'working', icon: 'loader' })).id;
@@ -315,8 +270,8 @@ export class GenerationSupervisor {
             const phases: Phase[] = phaseRes.phases.map((p: any) => ({ id: crypto.randomUUID(), title: p.title, description: p.goal, status: 'pending', retryCount: 0, type: p.type || 'ui' }));
             await this.callbacks.onPlanUpdate(phases);
             
-            // Mark phase planning as finished
-            await this.callbacks.onBuildMessage('phases_planning', { id: phasePlanMsgId, content: `Project broken into ${phases.length} build milestones.`, status: 'completed' });
+            // Close phase planning
+            await this.callbacks.onBuildMessage('phases_planning', { id: phasePlanMsgId, status: 'completed', content: `${phases.length} milestones planned.` });
 
             // 4. EXECUTION
             for (let i = 0; i < phases.length; i++) {
@@ -324,21 +279,16 @@ export class GenerationSupervisor {
                 if (isResume && phase.status === 'completed') continue;
                 
                 await this.callbacks.onPhaseStart(i, { text: phase.title });
-                const phaseExecMsgId = (await this.callbacks.onBuildMessage(`phase_${i}`, { type: 'build_phase', content: `Building Milestone: ${phase.title}`, status: 'working' })).id;
+                const phaseMsgId = (await this.callbacks.onBuildMessage(`phase_${i}`, { type: 'build_phase', content: `Building Milestone: ${phase.title}`, status: 'working' })).id;
                 
-                const stepsRes = await this.runStep('PLANNER', JSON.stringify({ phase, design: designSpec, is_initial: i === 0 }), phaseExecMsgId);
+                const stepsRes = await this.runStep('PLANNER', JSON.stringify({ phase, design: designSpec }), phaseMsgId);
                 const steps = stepsRes.steps || [];
 
                 for (let j = 0; j < steps.length; j++) {
                     const step = steps[j];
-                    // Provide detailed narration for each specific step
-                    await this.callbacks.onBuildMessage(`phase_${i}`, { 
-                        id: phaseExecMsgId, 
-                        content: `Milestone ${i + 1}: Implementing ${step.path} (${step.title})...`,
-                        currentStepProgress: { current: j + 1, total: steps.length, stepName: step.title } 
-                    });
+                    await this.callbacks.onBuildMessage(`phase_${i}`, { id: phaseMsgId, currentStepProgress: { current: j + 1, total: steps.length, stepName: step.title } });
                     
-                    const builderRes = await this.runStep('BUILDER', JSON.stringify({ task: step.description, path: step.path, design: designSpec, files: this.accumulatedFiles.map(f=>({path:f.path, content: f.content.substring(0, 500)})) }), phaseExecMsgId);
+                    const builderRes = await this.runStep('BUILDER', JSON.stringify({ task: step.description, path: step.path, design: designSpec, files: this.accumulatedFiles.map(f=>({path:f.path, content: f.content.substring(0, 500)})) }), phaseMsgId);
                     
                     if (builderRes.file_changes) {
                         for (const change of builderRes.file_changes) {
@@ -353,33 +303,51 @@ export class GenerationSupervisor {
                 }
                 phase.status = 'completed';
                 await this.callbacks.onPhaseComplete(i);
-                await this.callbacks.onBuildMessage(`phase_${i}`, { id: phaseExecMsgId, content: `Milestone ${i + 1} (${phase.title}) completed successfully.`, status: 'completed' });
+                await this.callbacks.onBuildMessage(`phase_${i}`, { id: phaseMsgId, status: 'completed' });
             }
 
             await this.callbacks.onSuccess(this.project.code, "Build complete.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
 
         } catch (e: any) {
-            await this.callbacks.onFinalError(e.message || "An unexpected error occurred during build.");
+            if (e.message !== "ABORTED") {
+                await this.callbacks.onFinalError(e.message || "An unexpected error occurred during build.");
+            }
         }
     }
 
     public async repair(error: string) {
         const msgId = (await this.callbacks.onBuildMessage('repair', { type: 'build_status', content: "Analyzing runtime error...", status: 'working', icon: 'wrench' })).id;
         try {
-            const res = await this.runStep('REPAIR_PLANNER', JSON.stringify({ error, files: this.accumulatedFiles.map(f=>({path: f.path, content: f.content.substring(0, 1000)})) }), msgId);
+            const res = await this.runStep('REPAIR_PLANNER', JSON.stringify({ 
+                error, 
+                files: this.accumulatedFiles.map(f=>({path: f.path, content: f.content.substring(0, 2000)})) 
+            }), msgId);
+
             if (res.patches) {
                 for (const patch of res.patches) {
                     const cleanPath = patch.path.replace(/^\//, '');
                     const idx = this.accumulatedFiles.findIndex(f => f.path === cleanPath);
-                    if (idx !== -1) this.accumulatedFiles[idx].content = sanitizeFileContent(patch.content, cleanPath);
-                    else this.accumulatedFiles.push({ path: cleanPath, content: sanitizeFileContent(patch.content, cleanPath), type: 'file' });
+                    const sanitized = sanitizeFileContent(patch.content, cleanPath);
+                    
+                    if (idx !== -1) {
+                        this.accumulatedFiles[idx].content = sanitized;
+                    } else {
+                        this.accumulatedFiles.push({ 
+                            path: cleanPath, 
+                            content: sanitized, 
+                            type: 'file' 
+                        });
+                    }
                 }
-                await this.callbacks.onChunkComplete(this.project.code, "Applied fix", { files: this.accumulatedFiles });
+                await this.callbacks.onChunkComplete(this.project.code, "Applied surgical fix", { files: this.accumulatedFiles });
             }
-            await this.callbacks.onBuildMessage('repair', { id: msgId, status: 'completed' });
+            
+            await this.callbacks.onBuildMessage('repair', { id: msgId, status: 'completed', content: "Error fixed successfully." });
             await this.callbacks.onSuccess(this.project.code, "Healed.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
         } catch (e: any) {
-            await this.callbacks.onFinalError("Repair failed: " + e.message);
+            if (e.message !== "ABORTED") {
+                await this.callbacks.onFinalError("Repair failed: " + e.message);
+            }
         }
     }
 }
@@ -387,13 +355,9 @@ export class GenerationSupervisor {
 export const generateProjectTitle = async (prompt: string, user: User, project: Project): Promise<string> => {
     try {
         const sys = await getSystemPrompt('TITLE');
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
-        const res = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: `Prompt: ${prompt}`,
-            config: { systemInstruction: sys, responseMimeType: 'application/json' }
-        });
-        const json = extractJson(res.text);
+        const config = await getActiveProvider();
+        const { text } = await executeAIRequest(config, `Request: ${prompt}`, sys);
+        const json = extractJson(text);
         return json.title || "My AI App";
     } catch (e) { return "New Project"; }
 };
