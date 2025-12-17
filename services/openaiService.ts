@@ -60,7 +60,7 @@ export const openaiService = {
 
         if (!isReasoningModel) {
             payload.temperature = 0.2;
-            payload.max_tokens = 10000;
+            payload.max_tokens = 4096;
         } else {
             // O1-preview supports max_completion_tokens
             payload.max_completion_tokens = 8192;

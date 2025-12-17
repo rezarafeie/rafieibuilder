@@ -25,10 +25,10 @@ const SUPABASE_URL = getEnv('SUPABASE_URL') || getEnv('REACT_APP_SUPABASE_URL') 
 const SUPABASE_KEY = getEnv('SUPABASE_ANON_KEY') || getEnv('REACT_APP_SUPABASE_ANON_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4dnFxa3RseWtndWlmdm1xcm5pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU0MDE0MTIsImV4cCI6MjA4MDk3NzQxMn0.5psTW7xePYH3T0mkkHmDoWNgLKSghOHnZaW2zzShkSA';
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// --- SYSTEM PROMPT MANAGEMENT ---
+// --- SYSTEM PROMPT MANAGEMENT (FORCE DATABASE ONLY) ---
 const promptCache: Record<string, string> = {};
 
-// Internal map for logical keys to DB keys
+// STRICT MAPPING TO V12 DB KEYS
 export const PROMPT_KEYS = {
     'CLASSIFIER': 'sys_prompt_classifier_v12',
     'DECISION': 'sys_prompt_decision_v12', 
@@ -38,16 +38,18 @@ export const PROMPT_KEYS = {
     'PLANNER': 'sys_prompt_planner_v12', 
     'BUILDER': 'sys_prompt_builder_v12', 
     'REPAIR_PLANNER': 'sys_prompt_repair_planner_v12',
+    'QA': 'sys_prompt_qa_v12',
+    'SQL': 'sys_prompt_sql_v12',
+    'NARRATOR': 'sys_prompt_narrator_v12',
     'TITLE': 'sys_prompt_title_v12'
 };
 
 /**
- * STRICT DB FETCH: This method FORCES a query to Supabase.
- * If the prompt key is missing from the database, the system will throw a critical error.
- * No hardcoded fallbacks are allowed.
+ * FORCED DB FETCH: This method strictly queries Supabase.
+ * No hardcoded strings are allowed as fallbacks.
+ * If the prompt key is missing from the database, it throws a fatal error.
  */
 const getSystemPrompt = async (key: string): Promise<string> => {
-    // Map logical key to DB key if needed
     const dbKey = (PROMPT_KEYS as any)[key] || key;
     
     if (promptCache[dbKey]) return promptCache[dbKey];
@@ -66,23 +68,26 @@ const getSystemPrompt = async (key: string): Promise<string> => {
             return data.value;
         }
     } catch (e) {
-        console.error(`CRITICAL: Prompt Fetch Error for [${dbKey}]:`, e);
+        console.error(`CRITICAL: Database Prompt Fetch Failure for [${dbKey}]:`, e);
     }
     
-    throw new Error(`CRITICAL CONFIG ERROR: System prompt [${dbKey}] is missing from the database. The builder cannot proceed without database instructions.`);
+    throw new Error(`CRITICAL CONFIG ERROR: Required system prompt [${dbKey}] is missing from the app database. The builder cannot proceed without database instructions.`);
 };
 
-// Fix: Exporting DEFAULTS required for reference in AdminPanel components
+// Admin Panel default references (Only used for UI previews, not builder logic)
 export const DEFAULTS: Record<string, string> = {
-    'CLASSIFIER': 'Categorize request: chat|build|repair|cloud_setup. Return JSON.',
-    'DECISION': 'Summarize architecture approach. Return JSON.',
-    'REQUIREMENTS': 'Check if DB is needed. Return JSON.',
-    'DESIGN': 'Define pages, routes, and UI components. Return JSON: {"pages": [], "theme": {}}',
-    'PHASE_PLANNER': 'Define milestones based on Design Spec. Return JSON.',
-    'PLANNER': 'Map current phase to file paths. Return JSON.',
-    'BUILDER': 'Write FULL React/Tailwind code. NO instructions. Return JSON.',
-    'REPAIR_PLANNER': 'Analyze error and patches. Return JSON.',
-    'TITLE': '2-3 word title. Return JSON.'
+    'CLASSIFIER': 'Strategic System Router. Categorize intent.',
+    'DECISION': 'Software Architect. Define strategy.',
+    'REQUIREMENTS': 'Systems Engineer. Check dependencies.',
+    'DESIGN': 'UI/UX Lead. Define aesthetic and pages.',
+    'PHASE_PLANNER': 'Project Manager. Slice work into phases.',
+    'PLANNER': 'Tech Lead. Slice phase into steps.',
+    'BUILDER': 'Full-Stack Developer. Write code.',
+    'REPAIR_PLANNER': 'Debug Specialist. Fix errors.',
+    'QA': 'Quality Assurance. Validate code.',
+    'SQL': 'DB Administrator. Generate schema.',
+    'NARRATOR': 'User Assistant. Explain progress.',
+    'TITLE': 'Brand Specialist. Generate app name.'
 };
 
 // --- ORCHESTRATOR UTILS ---
@@ -243,7 +248,6 @@ export class GenerationSupervisor {
             try {
                 const { text: resText, usage } = await robustGenerate(prompt, sys, this.project.id, this.project.userId, key, this.images, {messageId: logicalMessageKey});
                 
-                // Realtime AI Debug Logging
                 if (this.callbacks.onAIDebugLog) {
                     this.callbacks.onAIDebugLog({
                         id: crypto.randomUUID(),
