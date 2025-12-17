@@ -135,63 +135,51 @@ const robustGenerate = async (prompt: string, systemInstruction: string, project
     }
 };
 
+/**
+ * Advanced JSON extractor with greedy boundary detection and auto-repair.
+ */
 const extractJson = (text: string | undefined): any => {
     if (!text) throw new Error("Empty response from AI");
-    let currentCandidate = text.trim();
-    const MAX_PARSE_ATTEMPTS = 5; 
-    let parsedData: any = null;
+    
+    // 1. Remove Markdown Fences globally
+    let cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
 
-    for (let attempts = 0; attempts < MAX_PARSE_ATTEMPTS; attempts++) {
-        try {
-            parsedData = JSON.parse(currentCandidate);
-            if (typeof parsedData === 'object' && parsedData !== null) break; 
-            if (typeof parsedData === 'string') {
-                currentCandidate = parsedData.trim(); 
-                const markdownMatch = currentCandidate.match(/^```(?:\w+)?\s*([\s\S]*?)\s*```$/i);
-                if (markdownMatch) currentCandidate = markdownMatch[1].trim();
-                continue; 
-            }
-            break;
-        } catch (e) {
-            const firstBrace = currentCandidate.indexOf('{');
-            const lastBrace = currentCandidate.lastIndexOf('}');
-            const firstBracket = currentCandidate.indexOf('[');
-            const lastBracket = currentCandidate.lastIndexOf(']');
-            let foundJsonFragment = '';
-            if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) foundJsonFragment = currentCandidate.substring(firstBrace, lastBrace + 1);
-            else if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) foundJsonFragment = currentCandidate.substring(firstBracket, lastBracket + 1);
-            if (foundJsonFragment) {
-                currentCandidate = foundJsonFragment;
-                parsedData = null;
-                continue; 
-            }
-            parsedData = null; 
-            break;
-        }
+    // 2. Greedy Boundary Search
+    const firstBrace = cleaned.indexOf('{');
+    const firstBracket = cleaned.indexOf('[');
+    let startIdx = -1;
+    if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) startIdx = firstBrace;
+    else if (firstBracket !== -1) startIdx = firstBracket;
+
+    const lastBrace = cleaned.lastIndexOf('}');
+    const lastBracket = cleaned.lastIndexOf(']');
+    let endIdx = -1;
+    if (lastBrace !== -1 && (lastBracket === -1 || lastBrace > lastBracket)) endIdx = lastBrace;
+    else if (lastBracket !== -1) endIdx = lastBracket;
+
+    if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+        cleaned = cleaned.substring(startIdx, endIdx + 1);
     }
 
-    if (typeof parsedData !== 'object' || parsedData === null) throw new Error("Failed to parse JSON response.");
-
-    const processObject = (obj: any): any => {
-        if (typeof obj !== 'object' || obj === null) return obj;
-        if (Array.isArray(obj)) return obj.map(item => processObject(item));
-        const newObj: any = {};
-        for (const key in obj) {
-            if (Object.prototype.hasOwnProperty.call(obj, key)) {
-                if (['content', 'sql', 'description', 'message', 'outputs'].includes(key) && typeof obj[key] === 'string') {
-                    newObj[key] = sanitizeFileContent(obj[key], ""); 
-                } else {
-                    newObj[key] = processObject(obj[key]);
-                }
-            }
+    try {
+        // First try standard parse
+        return JSON.parse(cleaned);
+    } catch (e) {
+        // Second try: Fix common AI JSON errors (trailing commas, escaped single quotes)
+        try {
+            const fixed = cleaned
+                .replace(/,\s*([\]}])/g, '$1') // Remove trailing commas
+                .replace(/\\'/g, "'");        // Fix escaped single quotes
+            return JSON.parse(fixed);
+        } catch (e2) {
+            console.error("CRITICAL_PARSING_FAILURE. Input was:", text);
+            throw new Error("Failed to parse JSON response.");
         }
-        return newObj;
-    };
-    return processObject(parsedData);
+    }
 };
 
 export const PROMPT_KEYS = {
-    'DECISION': 'sys_prompt_decision_v5', // Iteration for intent classification
+    'DECISION': 'sys_prompt_decision_v5', 
     'REQUIREMENTS': 'sys_prompt_requirements_v3',
     'PHASE_PLANNER': 'sys_prompt_phase_planner_v4', 
     'DESIGN': 'sys_prompt_design_v3',
@@ -208,48 +196,23 @@ export const PROMPT_KEYS = {
 
 export const DEFAULTS = {
     DECISION: `Role: Strategic Intent Router
-Purpose: Classify user requests to trigger the correct workflow.
-Inputs: User Message, Existing File Structure.
+Purpose: Classify user requests into specific intents.
+Intents: "chat" (talk only), "config" (settings/cloud), "repair" (bug reported), "update" (incremental change to project), "new_build" (fresh start).
+Return STRICT JSON: {"analysis": {"intent": "...", "complexity": "..."}, "narrative_summary": "...", "response_message": "..."}`,
 
-Intents:
-1. "chat": The user is asking a question, seeking advice, or just talking. (No code changes needed).
-2. "config": User wants to connect a database, setup auth, or configure Rafiei Cloud settings.
-3. "repair": User reports an error, a bug, a blank screen, or "it's not working".
-4. "update": User wants to change, add, or delete something specific in an ALREADY EXISTING project.
-5. "new_build": User wants to start a completely new app or a project from scratch.
+    REQUIREMENTS: `Role: Technical Needs Analyzer. Return JSON: {"needs_backend": boolean, "reasoning": "..."}`,
 
-Return STRICT JSON:
-{
-  "analysis": {
-    "intent": "chat" | "config" | "repair" | "update" | "new_build",
-    "reasoning": "...",
-    "complexity": "low" | "medium" | "high"
-  },
-  "narrative_summary": "Friendly summary of what I'm about to do...",
-  "response_message": "Direct chat response if intent is 'chat' or 'config'..."
-}`,
+    PHASE_PLANNER: `Role: Build Workflow Architect. Break request into phases. 
+For "update", target ONLY the relevant files. 
+Return STRICT JSON: {"phases": [{"id": "...", "title": "...", "goal": "...", "type": "..."}]}`,
 
-    REQUIREMENTS: `Role: Technical Needs Analyzer. Analyze if the project needs backend (Auth, Database, Storage) based on user prompt.`,
-
-    PHASE_PLANNER: `Role: Build Workflow Architect. 
-Goal: Break the request into sequential phases.
-IMPORTANT: If the intent is 'update', the phases should only target the relevant components and logic, NOT recreate the whole app.
-If intent is 'new_build', start with a Bootstrap phase.
-
-Return STRICT JSON:
-{
-  "phases": [
-    { "id": "p1", "title": "...", "goal": "...", "type": "skeleton|ui|logic|backend" }
-  ]
-}`,
-
-    DESIGN: `Role: UI/UX Designer. Generate a detailed design spec including routes, components, and layout based on the user's vision.`,
-    PLANNER: `Role: Step-by-step Technical Planner. List the files to create or update for the current phase.`,
-    BUILDER: `Role: React/Tailwind Code Generator. Write executable, high-quality code for the specified file.`,
-    REPAIR_PLANNER: `Role: Senior Debugger. Provide minimal code patches to fix reported errors.`,
-    QA: `Role: Quality Assurance. Check for runtime errors and visual completeness.`,
-    SQL: `Role: Database Architect. Generate idempotent SQL for Supabase/PostgreSQL.`,
-    NARRATOR: `Role: User Companion. Explain technical steps in a friendly way.`,
+    DESIGN: `Role: UI/UX Designer. Generate spec for project.`,
+    PLANNER: `Role: Technical Planner. Return JSON: {"steps": [{"id": "...", "title": "...", "path": "...", "description": "..."}]}`,
+    BUILDER: `Role: React/Tailwind Code Generator. Return JSON: {"file_changes": [{"path": "...", "content": "..."}]}`,
+    REPAIR_PLANNER: `Role: Senior Debugger. Provide patches.`,
+    QA: `Role: Quality Assurance.`,
+    SQL: `Role: Database Architect.`,
+    NARRATOR: `Role: User Companion.`,
     FILE_PLAN: `Legacy`,
     CODE: `Legacy`
 };
@@ -308,7 +271,8 @@ export class GenerationSupervisor {
             this.checkAbort();
             try {
                 const { text: resText, usage } = await robustGenerate(prompt, sys, this.project.id, this.project.userId, key, this.images, {messageId: logicalMessageKey});
-                return { json: extractJson(resText), usage, executionTime: 0 };
+                const json = extractJson(resText);
+                return { json, usage, executionTime: 0 };
             } catch (e: any) {
                 lastError = e;
                 await this.callbacks.onError(e.message || "Unknown error", 2 - i);
@@ -319,13 +283,12 @@ export class GenerationSupervisor {
     }
 
     public async repair(initialError: string) {
-        const messageId = (await this.callbacks.onBuildMessage('repair_mode', { type: 'build_status', content: this.t('selfHealing'), status: 'working', icon: 'wrench' })).id;
+        const messageId = (await this.callbacks.onBuildMessage('repair_mode', { type: 'build_status', content: "thinking ....", status: 'working', icon: 'wrench' })).id;
         for (let attempt = 1; attempt <= 5; attempt++) {
             this.checkAbort();
             const repairResult = await this.runStep(PROMPT_KEYS['REPAIR_PLANNER'], JSON.stringify({ error: initialError, files: this.accumulatedFiles }), DEFAULTS.REPAIR_PLANNER, messageId);
             const { patches, explanation } = repairResult.json;
             if (patches && patches.length > 0) {
-                // Fix: Explicitly type patchMap and cast its values to any to prevent "unknown" property access errors
                 const patchMap = new Map<string, any>(patches.map((p: any) => [p.path.replace(/^\.?\//, ''), p]));
                 this.accumulatedFiles = this.accumulatedFiles.map(f => {
                     const patch = patchMap.get(f.path);
@@ -335,54 +298,48 @@ export class GenerationSupervisor {
                 if (this.callbacks.waitForPreview) {
                     const validation = await this.callbacks.waitForPreview(8000);
                     if (validation.success) {
-                         await this.callbacks.onBuildMessage('repair_mode', { id: messageId, content: "Self-repair complete. Preview is healthy.", status: 'completed', icon: 'check' });
+                         await this.callbacks.onBuildMessage('repair_mode', { id: messageId, content: "thinking ....", status: 'completed', icon: 'check' });
+                         await this.callbacks.onSuccess(this.project.code, "Repair complete.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
                          return;
                     }
                 }
             } else break;
         }
-        // Finalize status to ensure buttons reset
-        await this.callbacks.onSuccess({ html: '', javascript: '', css: '', explanation: 'Repairs finished.' }, "Repairs applied.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
+        await this.callbacks.onSuccess(this.project.code, "Repairs applied.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
     }
 
     public async start(isResume: boolean = false) {
         try {
             this.checkAbort();
             
-            // 1. DECISION (The Intelligent Router)
+            // 1. DECISION
             const decisionMsgId = (await this.callbacks.onBuildMessage('decision', { type: 'build_status', content: this.t('analyzingRequest'), status: 'working', icon: 'loader' })).id;
             const existingPaths = this.accumulatedFiles.map(f => f.path).join(', ');
             const decisionResult = await this.runStep(PROMPT_KEYS['DECISION'], `USER REQUEST: ${this.userPrompt}\nEXISTING_FILES: ${existingPaths || 'NONE'}\nIS_RESUME: ${isResume}`, DEFAULTS.DECISION, decisionMsgId);
             const decision = decisionResult.json;
             const intent = decision.analysis.intent;
 
-            // BRANCH: Chat only (No Code)
             if (intent === 'chat') {
                 await this.callbacks.onBuildMessage('decision', { id: decisionMsgId, type: 'assistant_response', content: decision.response_message || decision.narrative_summary, status: 'completed', icon: 'message-square' });
-                // CRITICAL: Flip status to idle to restore the "Send" button
                 await this.callbacks.onSuccess(this.project.code, "Chat complete.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
                 return;
             }
 
-            // BRANCH: Config/Database Cloud
             if (intent === 'config') {
-                await this.callbacks.onBuildMessage('decision', { id: decisionMsgId, type: 'action_required', content: decision.response_message || "I'll help you configure your database connection.", requiresAction: 'CONNECT_DATABASE', status: 'pending', icon: 'settings' });
-                // Even if action is required, we flip status to idle so the user can interact
+                await this.callbacks.onBuildMessage('decision', { id: decisionMsgId, type: 'action_required', content: decision.response_message || "thinking ....", requiresAction: 'CONNECT_DATABASE', status: 'pending', icon: 'settings' });
                 await this.callbacks.onSuccess(this.project.code, "Config requested.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
                 return;
             }
 
-            // BRANCH: Reported Error (Repair)
             if (intent === 'repair') {
-                await this.callbacks.onBuildMessage('decision', { id: decisionMsgId, content: "Detecting issue and starting automated repair...", status: 'completed', icon: 'wrench' });
+                await this.callbacks.onBuildMessage('decision', { id: decisionMsgId, content: "thinking ....", status: 'completed', icon: 'wrench' });
                 await this.repair("User reported: " + this.userPrompt);
                 return;
             }
 
-            // BRANCH: Build / Update (The Main Execution Loop)
             await this.callbacks.onBuildMessage('decision', { id: decisionMsgId, content: decision.narrative_summary, status: 'completed', icon: 'check' });
 
-            // 2. REQUIREMENTS & BACKEND GATING
+            // 2. REQUIREMENTS
             const reqMsgId = (await this.callbacks.onBuildMessage('requirements', { type: 'build_status', content: this.t('checkingBackend'), status: 'working', icon: 'loader' })).id;
             const requirementsResult = await this.runStep(PROMPT_KEYS['REQUIREMENTS'], JSON.stringify({ request: this.userPrompt, intent, analysis: decision }), DEFAULTS.REQUIREMENTS, reqMsgId);
             const requirements = requirementsResult.json;
@@ -390,43 +347,36 @@ export class GenerationSupervisor {
             const shouldBlockForBackend = (requirements.needs_backend || requirements.backendRequired) && !this.userPrompt.toLowerCase().includes('skip backend');
             if (shouldBlockForBackend && (!this.project.rafieiCloudProject || this.project.rafieiCloudProject.status !== 'ACTIVE')) {
                 await this.callbacks.onBuildMessage('requirements', { id: reqMsgId, type: 'action_required', content: this.t('backendActionRequired'), requiresAction: 'CONNECT_DATABASE', status: 'pending', icon: 'warning' });
-                // Flip to idle so user can click the button
                 await this.callbacks.onSuccess(this.project.code, "Backend required.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
                 return;
             }
 
-            // 3. PHASE PLANNING (Skip if resuming with existing plan)
+            // 3. PHASE PLANNING
             let phases: Phase[] = [];
             if (isResume && this.project.buildState?.phases && this.project.buildState.phases.length > 0) {
                 phases = this.project.buildState.phases;
-                console.log(`Resuming existing build with ${phases.length} phases.`);
             } else {
-                const planMsgId = (await this.callbacks.onBuildMessage('phase_planner', { type: 'build_plan', content: this.t('creatingBuildPlan'), status: 'working', icon: 'loader' })).id;
+                const planMsgId = (await this.callbacks.onBuildMessage('phase_planner', { type: 'build_plan', content: "thinking ....", status: 'working', icon: 'loader' })).id;
                 const phasePlanResult = await this.runStep(PROMPT_KEYS['PHASE_PLANNER'], JSON.stringify({ request: this.userPrompt, intent, analysis: decision, requirements, existing_files: existingPaths }), DEFAULTS.PHASE_PLANNER, planMsgId);
                 phases = phasePlanResult.json.phases.map((p: any) => ({ id: crypto.randomUUID(), title: p.title, description: p.goal, status: 'pending', retryCount: 0, type: p.type || 'ui' }));
                 await this.callbacks.onPlanUpdate(phases);
-                await this.callbacks.onBuildMessage('phase_planner', { id: planMsgId, content: this.t('planReady'), planData: phases.map(p => ({ title: p.title, status: 'pending' })), status: 'completed', icon: 'check' });
+                await this.callbacks.onBuildMessage('phase_planner', { id: planMsgId, content: "thinking ....", planData: phases.map(p => ({ title: p.title, status: 'pending' })), status: 'completed', icon: 'check' });
             }
 
-            // 4. DESIGN SPEC (Skip for resume/update if already done)
+            // 4. DESIGN SPEC
             if (intent === 'new_build' && !isResume) {
-                const designMsgId = (await this.callbacks.onBuildMessage('design_phase', { type: 'build_phase', content: this.t('startingDesign'), status: 'working', icon: 'loader' })).id;
+                const designMsgId = (await this.callbacks.onBuildMessage('design_phase', { type: 'build_phase', content: "thinking ....", status: 'working', icon: 'loader' })).id;
                 await this.runStep(PROMPT_KEYS['DESIGN'], JSON.stringify({ request: this.userPrompt, phases }), DEFAULTS.DESIGN, designMsgId);
-                await this.callbacks.onBuildMessage('design_phase', { id: designMsgId, content: this.t('designComplete'), status: 'completed', icon: 'check' });
+                await this.callbacks.onBuildMessage('design_phase', { id: designMsgId, content: "thinking ....", status: 'completed', icon: 'check' });
             }
 
             // 5. EXECUTION LOOP
             for (let i = 0; i < phases.length; i++) {
                 const phase = phases[i];
                 this.checkAbort();
+                if (isResume && phase.status === 'completed') continue;
 
-                // TRUE RESUME: Skip phases already completed
-                if (isResume && phase.status === 'completed') {
-                    console.log(`Resuming: Skipping phase ${phase.title}`);
-                    continue;
-                }
-
-                const phaseMsgId = (await this.callbacks.onBuildMessage(`phase_${phase.id}`, { type: 'build_phase', content: this.t('startingPhase', { phaseTitle: phase.title }), status: 'working', icon: 'loader' })).id;
+                const phaseMsgId = (await this.callbacks.onBuildMessage(`phase_${phase.id}`, { type: 'build_phase', content: "thinking ....", status: 'working', icon: 'loader' })).id;
                 await this.callbacks.onPhaseStart(i, { text: phase.title });
                 
                 const detailedPlan = await this.runStep(PROMPT_KEYS['PLANNER'], JSON.stringify({ phase, user_request: this.userPrompt, existing_files: existingPaths }), DEFAULTS.PLANNER, phaseMsgId);
@@ -435,9 +385,7 @@ export class GenerationSupervisor {
                 for (let j = 0; j < steps.length; j++) {
                     const step = steps[j];
                     this.checkAbort();
-                    
-                    await this.callbacks.onBuildMessage(`phase_${phase.id}`, { id: phaseMsgId, content: this.t('buildingPhase', { phaseTitle: phase.title, filePath: step.path }), currentStepProgress: { current: j + 1, total: steps.length, stepName: step.title } });
-                    
+                    await this.callbacks.onBuildMessage(`phase_${phase.id}`, { id: phaseMsgId, content: "thinking ....", currentStepProgress: { current: j + 1, total: steps.length, stepName: step.title } });
                     const codeRes = await this.runStep(PROMPT_KEYS['BUILDER'], JSON.stringify({ task: step.description, file_path: step.path, existing_files: this.accumulatedFiles.map(f => ({ path: f.path, content: f.content })) }), DEFAULTS.BUILDER, phaseMsgId);
                     
                     if (codeRes.json.file_changes) {
@@ -445,23 +393,19 @@ export class GenerationSupervisor {
                         for (const c of changes) {
                             const idx = this.accumulatedFiles.findIndex(f => f.path === c.path);
                             if (idx !== -1) {
-                                // Fix: Explicitly cast c to any before accessing content property
                                 this.accumulatedFiles[idx] = { ...this.accumulatedFiles[idx], content: sanitizeFileContent((c as any).content, c.path) };
                             } else {
-                                // Fix: Explicitly cast c to any before accessing content property
                                 this.accumulatedFiles.push({ path: c.path, content: sanitizeFileContent((c as any).content, c.path), type: 'file' });
                             }
                         }
                     }
-                    await this.callbacks.onChunkComplete({ html: '', javascript: '', css: '', explanation: `Step ${j+1}/${steps.length} finished.` }, `Built ${step.path}`, { files: this.accumulatedFiles });
+                    await this.callbacks.onChunkComplete({ html: '', javascript: '', css: '', explanation: `Built ${step.path}` }, `Built ${step.path}`, { files: this.accumulatedFiles });
                 }
-
                 phase.status = 'completed';
                 await this.callbacks.onPhaseComplete(i);
-                await this.callbacks.onBuildMessage(`phase_${phase.id}`, { id: phaseMsgId, content: this.t('phaseComplete', { phaseTitle: phase.title }), status: 'completed', icon: 'check' });
+                await this.callbacks.onBuildMessage(`phase_${phase.id}`, { id: phaseMsgId, content: "thinking ....", status: 'completed', icon: 'check' });
             }
 
-            // 6. FINAL SUCCESS
             const isFarsi = /[\u0600-\u06FF]/.test(this.userPrompt) || this.lang === 'fa';
             const successMsg = isFarsi ? "🎉 ساخت و بروزرسانی با موفقیت انجام شد!" : "🎉 Build and updates completed successfully!";
             await this.callbacks.onSuccess({ html: '', javascript: '', css: '', explanation: 'Success' }, successMsg, { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
@@ -475,7 +419,6 @@ export class GenerationSupervisor {
 
 export const handleUserIntent = async (project: Project, prompt: string) => ({ isArchitect: true });
 export const generateProjectTitle = async (prompt: string, user: User, project: Project): Promise<string> => {
-    // Fast mock for now
     return "Application";
 };
 export const generateSuggestions = async (msgs: Message[], code: GeneratedCode, id: string) => [];
