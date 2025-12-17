@@ -17,7 +17,7 @@ import ProjectLogModal, { LogEntry } from './ProjectLogModal';
 import { 
     Loader2, ArrowLeft, PanelLeft, Monitor, Tablet, Smartphone, 
     Check, Cloud, MessageSquare, Eye, Globe, X, LayoutDashboard, 
-    ExternalLink, Power, FileText, Rocket, AlertTriangle
+    ExternalLink, Power, FileText, Rocket, AlertTriangle, Play
 } from 'lucide-react';
 
 interface ProjectBuilderProps {
@@ -100,7 +100,6 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   
   const isMobile = typeof window !== 'undefined' ? window.innerWidth < 768 : false;
   
-  // @fix: Changed 'project.rafiei_cloud_project' to 'project.rafieiCloudProject' to match interface
   const cloudStatus = project?.rafieiCloudProject?.status || 'idle';
   const isCloudActive = cloudStatus === 'ACTIVE';
   const isConnectingCloud = cloudStatus === 'CREATING';
@@ -122,10 +121,19 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   // Unified Deployment state for overlay
   const isDeployingAnywhere = isAutoDeploying || isManualDeploying;
 
-  // Resumable state detection
-  const isResumable = project && (project.status === 'idle' || project.status === 'failed') && 
-                     project.buildState && project.buildState.phases && 
-                     project.buildState.phases.some(p => p.status !== 'completed');
+  /**
+   * REFINED RESUMABLE CHECK
+   * Only show the button if:
+   * 1. Project isn't currently busy.
+   * 2. BuildState exists and has an ACTUAL list of phases.
+   * 3. At least one of those phases is NOT completed or skipped.
+   */
+  const isResumable = project && 
+                     (project.status === 'idle' || project.status === 'failed') && 
+                     project.buildState && 
+                     Array.isArray(project.buildState.phases) && 
+                     project.buildState.phases.length > 0 && 
+                     project.buildState.phases.some(p => p.status !== 'completed' && p.status !== 'skipped');
 
   // FORCE LOCAL PREVIEW: We always return undefined for externalUrl to ensure the iframe uses srcDoc (generated code).
   // The Vercel URL is still accessible via the Publish Dropdown.
@@ -133,23 +141,16 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
   // Safe wrapper for runtime errors to prevent flashing on initial load
   const handleRuntimeError = (error: string) => {
-      // Check if we are in an active repair loop
       if (repairResolverRef.current) {
-          // If error occurs during repair validation wait, reject the promise with the error
           repairResolverRef.current({ success: false, error });
-          repairResolverRef.current = null; // Clear resolver
+          repairResolverRef.current = null;
           return;
       }
-
-      // If the project code is effectively empty (fresh skeleton), suppress errors
-      // as they are likely due to the empty state being rendered by the iframe.
       if (project && (!project.code.html && !project.files?.length)) return;
       if (isFirstGeneration) return;
-      
       setRuntimeError(error);
   };
 
-  // Persist pendingPrompt to localStorage
   useEffect(() => {
       if (projectId) {
           if (pendingPrompt) {
@@ -192,7 +193,6 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       };
   }, [isResizing, resize, stopResizing]);
 
-  // Log Message Listener
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
         if (event.data?.type === 'PREVIEW_LOG' && event.data.payload) {
@@ -203,12 +203,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
-  // SAFETY WATCHDOG
   useEffect(() => {
-      // This watchdog prevents the build from getting stuck in the INITIAL analysis phase.
-      // If the build has already progressed past phase 0 (Analysis), we disable this check
-      // to prevent false positives during complex, long-running build steps.
-      
       const isPastAnalysis = buildState && (
           (buildState.phases && buildState.phases.length > 0) || 
           (buildState.currentPhaseIndex !== undefined && buildState.currentPhaseIndex > 0) || 
@@ -237,9 +232,8 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                       handleSendMessage(lastUserMsg.content || '', [], updated, true);
                   }
               }
-          }, 1200000); // 20-minute timeout for INITIAL analysis only
+          }, 1200000); 
       } else {
-          // If we have passed analysis or aren't building, clear any pending timeout.
           if (watchdogRef.current) clearTimeout(watchdogRef.current);
       }
       return () => { if (watchdogRef.current) clearTimeout(watchdogRef.current); };
@@ -248,26 +242,21 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
   useEffect(() => {
       projectRef.current = project;
-      
-      // Auto-start build for fresh skeleton projects
       if (project && project.status === 'idle' && project.messages.length === 1 && project.messages[0].role === 'user' && !project.code.javascript && !autoStartRef.current) {
           autoStartRef.current = true;
           const prompt = project.messages[0].content || '';
           const images = project.messages[0].images?.map(url => ({ url, base64: '' })) || [];
-          console.log("Auto-triggering initial build for new project...");
           handleSendMessage(prompt, images, project, true); 
       }
 
-      // Check if project became active and we have a pending prompt to execute
-      // @fix: Changed 'project.rafiei_cloud_project' to 'project.rafieiCloudProject' to match interface
       if (project?.rafieiCloudProject?.status === 'ACTIVE' && pendingPrompt) {
           const promptToExecute = { ...pendingPrompt };
-          setPendingPrompt(null); // Clear pending
+          setPendingPrompt(null); 
 
           const successMsg: Message = {
             id: crypto.randomUUID(),
             role: 'assistant',
-            type: 'build_status', // Use new type
+            type: 'build_status',
             content: t('cloudConnectedAndResuming'),
             status: 'completed',
             icon: 'check',
@@ -292,7 +281,6 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
           if (p) {
               setProject(p);
               setBuildState(p.buildState || null);
-              // @fix: Changed 'p.rafiei_cloud_project' to 'p.rafieiCloudProject' to match interface
               if (p.rafieiCloudProject && p.rafieiCloudProject.status === 'CREATING') {
                   rafieiCloudService.monitorProvisioning(p.rafieiCloudProject, p.id);
               }
@@ -317,7 +305,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
     isAutoFixingRef.current = false;
     isUserStoppedRef.current = false;
     autoStartRef.current = false;
-    setFallbackToLocalPreview(false); // Reset on project load
+    setFallbackToLocalPreview(false); 
   }, [projectId]);
 
   useEffect(() => {
@@ -326,12 +314,11 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       setProject(updatedProject);
       setBuildState(updatedProject.buildState || null);
     });
-    return () => { unsubscribe(); }; // Explicit void return to fix TS error
+    return () => { unsubscribe(); }; 
   }, [projectId]);
 
   const handleStop = async () => {
     isUserStoppedRef.current = true;
-    // @fix: Changed 'project.rafiei_cloud_project' to 'project.rafieiCloudProject' to match interface
     if (isConnectingCloud && project?.rafieiCloudProject) {
         rafieiCloudService.cancelMonitoring(project.rafieiCloudProject.id);
         setPendingPrompt(null);
@@ -339,13 +326,12 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
         const cancelMsg: Message = { 
             id: crypto.randomUUID(), 
             role: 'assistant', 
-            type: 'build_status', // Use new type
+            type: 'build_status',
             content: t('cloudConnectionCancelled'), 
             status: 'failed',
             icon: 'x',
             timestamp: Date.now() 
         };
-        // @fix: Changed 'rafiei_cloud_project: undefined' to 'rafieiCloudProject: undefined' to match interface
         const updated = { ...project, rafieiCloudProject: undefined, messages: [...project.messages, cancelMsg], updatedAt: Date.now() };
         setProject(updated);
         setBuildState(null);
@@ -370,11 +356,9 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
   const handleContinue = () => {
       if (!project) return;
-      // Get original prompt
       const lastUserMsg = [...project.messages].reverse().find(m => m.role === 'user');
       const prompt = lastUserMsg?.content || "";
       const images = lastUserMsg?.images?.map(url => ({ url, base64: '' })) || [];
-      
       handleSendMessage(prompt, images, project, false, false, false, true);
   };
   
@@ -382,13 +366,10 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       if (project) {
           isAutoFixingRef.current = true;
           setRuntimeError(null);
-
-          // Clear any previous resolver to avoid leaks
           if (repairResolverRef.current) {
               repairResolverRef.current({ success: false, error: "Restarted repair" });
               repairResolverRef.current = null;
           }
-
           const onUpdateCallback = (updatedState: Project, meta?: any) => {
               setProject(prev => {
                   if (!prev || prev.id !== updatedState.id) return prev;
@@ -396,22 +377,17 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
               });
               setBuildState(updatedState.buildState || null);
           };
-
           const waitForPreview = (timeoutMs: number) => {
               return new Promise<{success: boolean, error?: string}>((resolve) => {
-                  // Set the resolver that handleRuntimeError will call if an error occurs
                   repairResolverRef.current = resolve;
-                  
-                  // Set a timeout to assume success if no error occurs
                   setTimeout(() => {
-                      if (repairResolverRef.current === resolve) { // Check if still the active resolver
+                      if (repairResolverRef.current === resolve) {
                           resolve({ success: true });
                           repairResolverRef.current = null;
                       }
                   }, timeoutMs);
               });
           };
-
           cloudService.triggerRepair(
               project, 
               runtimeError || "Unknown runtime error", 
@@ -454,7 +430,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
         const failMsg: Message = { 
             id: crypto.randomUUID(), 
             role: 'assistant', 
-            type: 'build_error', // Use new type
+            type: 'build_error',
             content: t('cloudConnectionFailedError', {errorMessage: error.message}), 
             status: 'failed',
             icon: 'x',
@@ -468,76 +444,56 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
   const handleSkipBackend = async () => {
       if (!project) return;
-      
       let previousIntent = "";
       let previousImages: { url: string; base64: string }[] = [];
-
-      // 1. Try to recover intent from pending prompt if available
       if (pendingPrompt) {
           previousIntent = pendingPrompt.content;
           previousImages = pendingPrompt.images || [];
       } else {
-          // 2. Fallback: find the last user message to provide context
           const lastUserMsg = [...project.messages].reverse().find(m => m.role === 'user');
           if (lastUserMsg) {
               previousIntent = lastUserMsg.content || "";
-              // Recover images attached to the last prompt so the AI can still see them
               if (lastUserMsg.images && lastUserMsg.images.length > 0) {
-                  // Map URL back to object. Base64 is likely lost from memory but URL persists in DB.
-                  // The service layer (geminiService) handles fetching from URL if base64 is missing.
                   previousImages = lastUserMsg.images.map(url => ({ url, base64: '' }));
               }
           }
       }
-
-      // Explicitly reference the previous intent so the AI knows what to build
       const skipMessage = `I want to continue with my previous request: "${previousIntent}". \n\nHowever, please skip the backend connection for now. Proceed with a frontend-only implementation using mock data.`;
-      
-      // Clear pending state
       setPendingPrompt(null);
-      
-      // Send message invisibly (isHidden=true) so it doesn't clutter the UI with the system prompt, 
-      // but still triggers the build process with the full context (text + images).
       await handleSendMessage(skipMessage, previousImages, project, false, false, true);
   };
 
-  // --- MANUAL DEPLOYMENT HANDLERS (for PublishDropdown) ---
   const handleManualDeployStart = () => {
       setIsManualDeploying(true);
       setManualDeployError(null);
-      setFallbackToLocalPreview(false); // Reset fallback on new attempt
+      setFallbackToLocalPreview(false);
   };
 
   const handleManualDeployComplete = useCallback(async (vercelConfig: VercelConfig | null, error: string | null) => {
       if (error) {
           setManualDeployError(error);
           setIsManualDeploying(false);
-          setFallbackToLocalPreview(true); // Force local preview if deploy failed (e.g. rate limit)
+          setFallbackToLocalPreview(true);
       } else if (vercelConfig) {
-          // Wait 2 seconds before showing the live URL to allow overlay to show completion state
           await new Promise(resolve => setTimeout(resolve, 2000));
-
-          // Update project state with new vercel config locally (realtime subscription will also update)
           setProject(prev => {
               if (prev) {
                   return { ...prev, vercelConfig, publishedUrl: vercelConfig.productionUrl };
               }
               return prev;
           });
-
           setIsManualDeploying(false);
-          setShowPublishDropdown(false); // Close dropdown
+          setShowPublishDropdown(false);
       }
   }, []);
 
-  // --- MAIN SEND MESSAGE ---
   const handleSendMessage = async (
       content: string, 
       images: { url: string; base64: string }[], 
       projectOverride?: Project, 
       isInitialAutoStart = false, 
       isAutoFix = false,
-      isHidden = false, // New parameter to send prompts without showing in UI
+      isHidden = false, 
       isResume = false
   ) => {
     const currentProject = projectOverride || projectRef.current;
@@ -548,7 +504,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
     handleClearCloudConnectionState();
     setRuntimeError(null);
     isUserStoppedRef.current = false;
-    setFallbackToLocalPreview(false); // Reset fallback when starting new build
+    setFallbackToLocalPreview(false);
 
     if (!isAutoFix && !isInitialAutoStart && !isResume) {
         autoRepairAttemptsRef.current = 0;
@@ -557,7 +513,6 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
     let updatedProject = currentProject;
 
-    // Only add user message to UI if NOT hidden and NOT initial auto-start and NOT resume
     if (!isInitialAutoStart && !isHidden && !isResume) {
         const userMsg: Message = {
             id: crypto.randomUUID(),
@@ -573,7 +528,6 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
             updatedAt: Date.now() 
         };
         setProject(updatedProject);
-        // CRITICAL: Save the user message to DB immediately so it's not lost on refresh
         try {
             await cloudService.saveProject(updatedProject);
         } catch (e) {
@@ -581,9 +535,8 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
         }
     }
 
-    // Prepare logs - if resuming, keep existing logs if we want, or just add a 'Resuming' marker
     const initialLogs = isResume 
-        ? [...(buildState?.logs || []), "Resuming build process..."]
+        ? [...(buildState?.logs || []), "thinking ...."]
         : [t('initBuild'), t('analyzingReq'), t('preparingEnv')];
     
     setBuildState({
@@ -615,20 +568,15 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
         setProject(projectToBuild); 
 
         const onUpdateCallback = (updatedState: Project, meta?: any) => {
-            // This is the new handleLocalStateUpdate
             setProject(prev => {
                 if (!prev || prev.id !== updatedState.id) return prev;
                 return updatedState;
             });
             setBuildState(updatedState.buildState || null);
-
-            // FIX: Clear runtime errors if the build finished successfully with a passing audit
             if (updatedState.status === 'idle' && updatedState.buildState?.audit?.passed) {
                 setRuntimeError(null);
             }
-
             if (meta?.requires_database && !pendingPrompt) {
-                console.log("Database connection required, saving pending prompt.");
                 setPendingPrompt({ content, images });
             }
         };
@@ -641,7 +589,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
         const errorMsg: Message = { 
             id: crypto.randomUUID(), 
             role: 'assistant', 
-            type: 'build_error', // Use new type
+            type: 'build_error',
             content: `Error: ${e.message}`, 
             status: 'failed',
             icon: 'x',
@@ -653,11 +601,9 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
     }
   };
   
-  // Log Handlers
   const handleOpenLogs = async () => {
       if (!project) return;
       setIsLogModalOpen(true);
-      // Fetch fresh logs on open
       try {
           const logs = await cloudService.getProjectLogs(project.id);
           setCloudLogs(logs.map(l => ({
@@ -667,7 +613,6 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
           })));
       } catch (e) {}
 
-      // Synthesize Vercel logs
       if (project.vercelConfig) {
           setVercelLogs([
               { timestamp: new Date(project.vercelConfig.lastDeployedAt).toISOString(), level: 'info', message: `Deployment ${project.vercelConfig.latestDeploymentId} created.` },
@@ -681,7 +626,6 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
   const handleClearLogs = (logType: 'preview' | 'all') => {
       if (logType === 'preview') setPreviewLogs([]);
-      // could add 'all' case if needed
   };
 
   const builderLogs = project?.buildState?.logs?.map(log => ({
@@ -695,7 +639,6 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   if (!project) return null;
 
   const deviceSizeClass = deviceMode === 'desktop' ? 'w-full h-full' : deviceMode === 'tablet' ? 'w-[768px] h-full max-w-full mx-auto' : 'w-[375px] h-[667px] max-w-full mx-auto';
-  // @fix: Changed 'project.rafiei_cloud_project' to 'project.rafieiCloudProject' to match interface
   const hasCloudProject = project.rafieiCloudProject != null && project.rafieiCloudProject.status === 'ACTIVE';
   
   return (
@@ -710,7 +653,6 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
             onClear={handleClearLogs}
         />
         
-        {/* Header */}
         <div className="hidden md:flex h-14 bg-white dark:bg-[#0f172a] border-b border-slate-200 dark:border-slate-700 items-center justify-between px-4 z-20 shrink-0">
             <div className="flex items-center gap-2">
                 <button onClick={() => navigate('/dashboard')} className="p-2 hover:bg-slate-100 dark:hover:bg-gray-800 rounded-lg text-slate-500 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white transition-colors flex items-center gap-2">
@@ -755,7 +697,6 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
             </div>
         </div>
 
-        {/* Mobile Header */}
         <div className="md:hidden h-14 bg-white dark:bg-[#0f172a] border-b border-slate-200 dark:border-slate-700 flex items-center justify-between px-4 shrink-0 z-20">
             <button onClick={() => navigate('/dashboard')}><ArrowLeft size={20} className="text-slate-600 dark:text-slate-300 rtl:rotate-180" /></button>
             <div className="flex bg-slate-100 dark:bg-slate-800 rounded-lg p-1">
@@ -781,7 +722,6 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
             </div>
         </div>
 
-        {/* Main Content */}
         <div className="flex-1 flex overflow-hidden relative">
             <div className={`${isMobile ? (mobileTab === 'chat' ? 'w-full' : 'hidden') : (isSidebarOpen ? 'flex' : 'hidden')} flex-col border-r border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-[#0f172a] transition-all duration-300 relative`} style={{ width: isMobile ? '100%' : `${sidebarWidth}px` }}>
                 <ChatInterface 
@@ -812,7 +752,6 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
             <div className={`flex-1 bg-slate-100 dark:bg-black/50 relative overflow-hidden flex flex-col items-center justify-center ${isMobile && mobileTab !== 'preview' ? 'hidden' : 'flex'}`}>
                 
-                {/* Deployment Overlay */}
                 {isDeployingAnywhere && (
                     <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex flex-col items-center justify-center text-white animate-in fade-in duration-300">
                         <div className="flex flex-col items-center gap-6">
@@ -858,7 +797,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                             files={project.files}
                             isGenerating={isThinking}
                             isUpdating={isUpdating}
-                            onRuntimeError={handleRuntimeError} // Use the robust handler
+                            onRuntimeError={handleRuntimeError} 
                             projectId={project.id}
                             active={!isMobile || mobileTab === 'preview'}
                             externalUrl={previewUrl}
