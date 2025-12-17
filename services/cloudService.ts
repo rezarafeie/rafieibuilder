@@ -187,21 +187,51 @@ export const cloudService = {
         const createOrUpdateBuildMessage = async (logicalKey: string, message: Partial<Message>): Promise<Message> => {
             if (signal.aborted) throw new Error("ABORTED");
             
-            // Resolve ID from map or generate new one
             let msgId = this.messageMap[logicalKey];
             let updatedMessages = [...currentProject.messages];
             const idx = msgId ? updatedMessages.findIndex(m => m.id === msgId) : -1;
 
             if (idx !== -1) {
-                updatedMessages[idx] = { ...updatedMessages[idx], ...message, timestamp: Date.now() };
+                const prevMsg = updatedMessages[idx];
+                const now = Date.now();
+                
+                // Track start time when moving to working
+                let startTime = prevMsg.startTime;
+                if (message.status === 'working' && !prevMsg.startTime) {
+                    startTime = now;
+                }
+
+                // Calculate duration when moving to completed
+                let thoughtDurationMs = prevMsg.thoughtDurationMs;
+                if (message.status === 'completed' && prevMsg.startTime && !prevMsg.thoughtDurationMs) {
+                    thoughtDurationMs = now - prevMsg.startTime;
+                }
+
+                updatedMessages[idx] = { 
+                    ...prevMsg, 
+                    ...message, 
+                    startTime,
+                    thoughtDurationMs,
+                    timestamp: now 
+                };
             } else {
                 msgId = crypto.randomUUID();
                 this.messageMap[logicalKey] = msgId;
-                updatedMessages.push({ id: msgId, role: 'assistant', timestamp: Date.now(), status: 'pending', content: '', ...message } as Message);
+                const now = Date.now();
+                const startTime = message.status === 'working' ? now : undefined;
+                
+                updatedMessages.push({ 
+                    id: msgId, 
+                    role: 'assistant', 
+                    timestamp: now, 
+                    startTime,
+                    status: message.status || 'pending', 
+                    content: '', 
+                    ...message 
+                } as Message);
             }
             
             updateLocalState({ messages: updatedMessages });
-            // Direct save for persistence
             try { await this.saveProject(currentProject); } catch(e) {}
             
             return updatedMessages.find(m => m.id === msgId)!;

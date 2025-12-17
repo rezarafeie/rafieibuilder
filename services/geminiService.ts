@@ -140,13 +140,10 @@ const robustGenerate = async (prompt: string, systemInstruction: string, project
  */
 const remedyJson = (s: string): string => {
     return s
-        // 1. Fix unescaped newlines inside JSON string values
         .replace(/(?<=[:[,])\s*"(?:[^"\\]|\\.)*"/g, (match) => {
             return match.replace(/\n/g, "\\n").replace(/\r/g, "\\r");
         })
-        // 2. Remove trailing commas in objects/arrays
         .replace(/,\s*([\]}])/g, '$1')
-        // 3. Fix unescaped single quotes in what should be double-quoted values (risky but often needed)
         .replace(/\\'/g, "'");
 };
 
@@ -171,11 +168,9 @@ const extractJson = (text: string | undefined): any => {
     if (res) return res;
 
     // 3. Pattern search (Enclosed blocks)
-    // We search for all potential JSON blocks and try parsing them from the end (usually the result)
     const blocks = cleaned.match(/\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}|\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]/g);
     
     if (blocks) {
-        // AI usually puts the target JSON at the end if it was talking/thinking first
         for (let i = blocks.length - 1; i >= 0; i--) {
             res = tryParse(blocks[i]);
             if (res) return res;
@@ -313,7 +308,7 @@ export class GenerationSupervisor {
             try {
                 const { text: resText, usage } = await robustGenerate(prompt, sys, this.project.id, this.project.userId, key, this.images, {messageId: logicalMessageKey});
                 const json = extractJson(resText);
-                return { json, usage, executionTime: 0 };
+                return { json, usage, executionTime: 0, raw: resText };
             } catch (e: any) {
                 lastError = e;
                 await this.callbacks.onError(e.message || "Unknown error", 2 - i);
@@ -339,7 +334,7 @@ export class GenerationSupervisor {
                 if (this.callbacks.waitForPreview) {
                     const validation = await this.callbacks.waitForPreview(8000);
                     if (validation.success) {
-                         await this.callbacks.onBuildMessage('repair_mode', { id: messageId, content: "thinking ....", status: 'completed', icon: 'check' });
+                         await this.callbacks.onBuildMessage('repair_mode', { id: messageId, content: "thinking ....", status: 'completed', icon: 'check', details: `Attempt ${attempt}: ${explanation}` });
                          await this.callbacks.onSuccess(this.project.code, "Repair complete.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
                          return;
                     }
@@ -354,7 +349,7 @@ export class GenerationSupervisor {
             this.checkAbort();
             
             // 1. DECISION
-            const decisionMsgId = (await this.callbacks.onBuildMessage('decision', { type: 'build_status', content: "thinking ....", status: 'working', icon: 'loader' })).id;
+            const decisionMsgId = (await this.callbacks.onBuildMessage('decision', { type: 'build_status', content: this.t('analyzingRequest'), status: 'working', icon: 'loader' })).id;
             const existingPaths = this.accumulatedFiles.map(f => f.path).join(', ');
             const fileSummary = this.getFileSummary();
 
@@ -380,19 +375,20 @@ export class GenerationSupervisor {
                 return;
             }
 
-            await this.callbacks.onBuildMessage('decision', { id: decisionMsgId, content: decision.narrative_summary, status: 'completed', icon: 'check' });
+            await this.callbacks.onBuildMessage('decision', { id: decisionMsgId, content: decision.narrative_summary, status: 'completed', icon: 'check', details: JSON.stringify(decision.analysis, null, 2) });
 
             // 2. REQUIREMENTS
-            const reqMsgId = (await this.callbacks.onBuildMessage('requirements', { type: 'build_status', content: "thinking ....", status: 'working', icon: 'loader' })).id;
+            const reqMsgId = (await this.callbacks.onBuildMessage('requirements', { type: 'build_status', content: this.t('checkingBackend'), status: 'working', icon: 'loader' })).id;
             const requirementsResult = await this.runStep(PROMPT_KEYS['REQUIREMENTS'], JSON.stringify({ request: this.userPrompt, intent, analysis: decision }), DEFAULTS.REQUIREMENTS, reqMsgId);
             const requirements = requirementsResult.json;
 
             const shouldBlockForBackend = (requirements.needs_backend || requirements.backendRequired) && !this.userPrompt.toLowerCase().includes('skip backend');
             if (shouldBlockForBackend && (!this.project.rafieiCloudProject || this.project.rafieiCloudProject.status !== 'ACTIVE')) {
-                await this.callbacks.onBuildMessage('requirements', { id: reqMsgId, type: 'action_required', content: this.t('backendActionRequired'), requiresAction: 'CONNECT_DATABASE', status: 'pending', icon: 'warning' });
+                await this.callbacks.onBuildMessage('requirements', { id: reqMsgId, type: 'action_required', content: this.t('backendActionRequired'), requiresAction: 'CONNECT_DATABASE', status: 'pending', icon: 'warning', details: requirements.reasoning });
                 await this.callbacks.onSuccess(this.project.code, "Backend required.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
                 return;
             }
+            await this.callbacks.onBuildMessage('requirements', { id: reqMsgId, content: "thinking ....", status: 'completed', icon: 'check', details: requirements.reasoning });
 
             // 3. PHASE PLANNING
             let phases: Phase[] = [];
@@ -403,14 +399,14 @@ export class GenerationSupervisor {
                 const phasePlanResult = await this.runStep(PROMPT_KEYS['PHASE_PLANNER'], JSON.stringify({ request: this.userPrompt, intent, analysis: decision, requirements, existing_files: existingPaths, file_summary: fileSummary, is_resume: isResume }), DEFAULTS.PHASE_PLANNER, planMsgId);
                 phases = phasePlanResult.json.phases.map((p: any) => ({ id: crypto.randomUUID(), title: p.title, description: p.goal, status: 'pending', retryCount: 0, type: p.type || 'ui' }));
                 await this.callbacks.onPlanUpdate(phases);
-                await this.callbacks.onBuildMessage('phase_planner', { id: planMsgId, content: "thinking ....", planData: phases.map(p => ({ title: p.title, status: 'pending' })), status: 'completed', icon: 'check' });
+                await this.callbacks.onBuildMessage('phase_planner', { id: planMsgId, content: "thinking ....", planData: phases.map(p => ({ title: p.title, status: 'pending' })), status: 'completed', icon: 'check', details: `Orchestrating ${phases.length} phases.` });
             }
 
             // 4. DESIGN SPEC
             if (intent === 'new_build' && !isResume) {
                 const designMsgId = (await this.callbacks.onBuildMessage('design_phase', { type: 'build_phase', content: "thinking ....", status: 'working', icon: 'loader' })).id;
-                await this.runStep(PROMPT_KEYS['DESIGN'], JSON.stringify({ request: this.userPrompt, phases }), DEFAULTS.DESIGN, designMsgId);
-                await this.callbacks.onBuildMessage('design_phase', { id: designMsgId, content: "thinking ....", status: 'completed', icon: 'check' });
+                const designResult = await this.runStep(PROMPT_KEYS['DESIGN'], JSON.stringify({ request: this.userPrompt, phases }), DEFAULTS.DESIGN, designMsgId);
+                await this.callbacks.onBuildMessage('design_phase', { id: designMsgId, content: "thinking ....", status: 'completed', icon: 'check', details: JSON.stringify(designResult.json, null, 2) });
             }
 
             // 5. EXECUTION LOOP
@@ -422,13 +418,13 @@ export class GenerationSupervisor {
                 const phaseMsgId = (await this.callbacks.onBuildMessage(`phase_${phase.id}`, { type: 'build_phase', content: "thinking ....", status: 'working', icon: 'loader' })).id;
                 await this.callbacks.onPhaseStart(i, { text: phase.title });
                 
-                const detailedPlan = await this.runStep(PROMPT_KEYS['PLANNER'], JSON.stringify({ phase, user_request: this.userPrompt, existing_files: this.accumulatedFiles.map(f => ({ path: f.path, summary: f.content.substring(0, 1000) })) }), DEFAULTS.PLANNER, phaseMsgId);
-                const steps = detailedPlan.json.steps || [];
+                const detailedPlanResult = await this.runStep(PROMPT_KEYS['PLANNER'], JSON.stringify({ phase, user_request: this.userPrompt, existing_files: this.accumulatedFiles.map(f => ({ path: f.path, summary: f.content.substring(0, 1000) })) }), DEFAULTS.PLANNER, phaseMsgId);
+                const steps = detailedPlanResult.json.steps || [];
 
                 for (let j = 0; j < steps.length; j++) {
                     const step = steps[j];
                     this.checkAbort();
-                    await this.callbacks.onBuildMessage(`phase_${phase.id}`, { id: phaseMsgId, content: "thinking ....", currentStepProgress: { current: j + 1, total: steps.length, stepName: step.title } });
+                    await this.callbacks.onBuildMessage(`phase_${phase.id}`, { id: phaseMsgId, content: "thinking ....", currentStepProgress: { current: j + 1, total: steps.length, stepName: step.title }, details: detailedPlanResult.raw });
                     
                     const targetFile = this.accumulatedFiles.find(f => f.path === step.path);
                     const codeRes = await this.runStep(PROMPT_KEYS['BUILDER'], JSON.stringify({ 
