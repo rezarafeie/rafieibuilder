@@ -89,6 +89,9 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   const [cloudLogs, setCloudLogs] = useState<LogEntry[]>([]);
   const [vercelLogs, setVercelLogs] = useState<LogEntry[]>([]);
 
+  // Refs for Repair Loop Bridge
+  const repairResolverRef = useRef<((result: {success: boolean, error?: string}) => void) | null>(null);
+
   const desktopPublishRef = useRef<HTMLDivElement>(null);
   const mobilePublishRef = useRef<HTMLDivElement>(null);
 
@@ -124,6 +127,14 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
   // Safe wrapper for runtime errors to prevent flashing on initial load
   const handleRuntimeError = (error: string) => {
+      // Check if we are in an active repair loop
+      if (repairResolverRef.current) {
+          // If error occurs during repair validation wait, reject the promise with the error
+          repairResolverRef.current({ success: false, error });
+          repairResolverRef.current = null; // Clear resolver
+          return;
+      }
+
       // If the project code is effectively empty (fresh skeleton), suppress errors
       // as they are likely due to the empty state being rendered by the iframe.
       if (project && (!project.code.html && !project.files?.length)) return;
@@ -207,7 +218,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                   
                   const lastUserMsg = [...project.messages].reverse().find(m => m.role === 'user');
                   if (lastUserMsg) {
-                      handleSendMessage(lastUserMsg.content, [], updated, true);
+                      handleSendMessage(lastUserMsg.content || '', [], updated, true);
                   }
               }
           }, 240000); 
@@ -223,7 +234,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       // Auto-start build for fresh skeleton projects
       if (project && project.status === 'idle' && project.messages.length === 1 && project.messages[0].role === 'user' && !project.code.javascript && !autoStartRef.current) {
           autoStartRef.current = true;
-          const prompt = project.messages[0].content;
+          const prompt = project.messages[0].content || '';
           const images = project.messages[0].images?.map(url => ({ url, base64: '' })) || [];
           console.log("Auto-triggering initial build for new project...");
           handleSendMessage(prompt, images, project, true); 
@@ -337,10 +348,47 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   
   const handleAutoFix = () => {
       if (project) {
-          const prompt = runtimeError ? `I encountered a runtime error: "${runtimeError}". Please fix it.` : "The code has an error. Fix it.";
           isAutoFixingRef.current = true;
-          handleSendMessage(prompt, [], project, false, true);
           setRuntimeError(null);
+
+          // Clear any previous resolver to avoid leaks
+          if (repairResolverRef.current) {
+              repairResolverRef.current({ success: false, error: "Restarted repair" });
+              repairResolverRef.current = null;
+          }
+
+          const onUpdateCallback = (updatedState: Project, meta?: any) => {
+              setProject(prev => {
+                  if (!prev || prev.id !== updatedState.id) return prev;
+                  return updatedState;
+              });
+              setBuildState(updatedState.buildState || null);
+          };
+
+          const waitForPreview = (timeoutMs: number) => {
+              return new Promise<{success: boolean, error?: string}>((resolve) => {
+                  // Set the resolver that handleRuntimeError will call if an error occurs
+                  repairResolverRef.current = resolve;
+                  
+                  // Set a timeout to assume success if no error occurs
+                  setTimeout(() => {
+                      if (repairResolverRef.current === resolve) { // Check if still the active resolver
+                          resolve({ success: true });
+                          repairResolverRef.current = null;
+                      }
+                  }, timeoutMs);
+              });
+          };
+
+          cloudService.triggerRepair(
+              project, 
+              runtimeError || "Unknown runtime error", 
+              onUpdateCallback,
+              waitForPreview
+          ).catch(e => {
+              console.error("Repair loop failed:", e);
+              isAutoFixingRef.current = false;
+          });
       }
   };
   
@@ -390,12 +438,24 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       if (!project) return;
       
       let previousIntent = "";
-      if (pendingPrompt && pendingPrompt.content) {
+      let previousImages: { url: string; base64: string }[] = [];
+
+      // 1. Try to recover intent from pending prompt if available
+      if (pendingPrompt) {
           previousIntent = pendingPrompt.content;
+          previousImages = pendingPrompt.images || [];
       } else {
-          // Fallback: find the last user message to provide context
+          // 2. Fallback: find the last user message to provide context
           const lastUserMsg = [...project.messages].reverse().find(m => m.role === 'user');
-          if (lastUserMsg && lastUserMsg.content) previousIntent = lastUserMsg.content;
+          if (lastUserMsg) {
+              previousIntent = lastUserMsg.content || "";
+              // Recover images attached to the last prompt so the AI can still see them
+              if (lastUserMsg.images && lastUserMsg.images.length > 0) {
+                  // Map URL back to object. Base64 is likely lost from memory but URL persists in DB.
+                  // The service layer (geminiService) handles fetching from URL if base64 is missing.
+                  previousImages = lastUserMsg.images.map(url => ({ url, base64: '' }));
+              }
+          }
       }
 
       // Explicitly reference the previous intent so the AI knows what to build
@@ -404,8 +464,9 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       // Clear pending state
       setPendingPrompt(null);
       
-      // Send message
-      await handleSendMessage(skipMessage, [], project, false, false);
+      // Send message invisibly (isHidden=true) so it doesn't clutter the UI with the system prompt, 
+      // but still triggers the build process with the full context (text + images).
+      await handleSendMessage(skipMessage, previousImages, project, false, false, true);
   };
 
   // --- MANUAL DEPLOYMENT HANDLERS (for PublishDropdown) ---
@@ -438,7 +499,14 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   }, []);
 
   // --- MAIN SEND MESSAGE ---
-  const handleSendMessage = async (content: string, images: { url: string; base64: string }[], projectOverride?: Project, isInitialAutoStart = false, isAutoFix = false) => {
+  const handleSendMessage = async (
+      content: string, 
+      images: { url: string; base64: string }[], 
+      projectOverride?: Project, 
+      isInitialAutoStart = false, 
+      isAutoFix = false,
+      isHidden = false // New parameter to send prompts without showing in UI
+  ) => {
     const currentProject = projectOverride || projectRef.current;
     
     if (!currentProject || !user || (currentProject.status === 'generating' && !projectOverride && !isInitialAutoStart)) return;
@@ -456,7 +524,8 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
     let updatedProject = currentProject;
 
-    if (!isInitialAutoStart) {
+    // Only add user message to UI if NOT hidden and NOT initial auto-start
+    if (!isInitialAutoStart && !isHidden) {
         const userMsg: Message = {
             id: crypto.randomUUID(),
             role: 'user',

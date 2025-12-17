@@ -1,4 +1,6 @@
 
+
+
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Message, Suggestion, BuildState, User } from '../types';
 import { Send, Sparkles, Square, RefreshCw, Wrench, Lightbulb, Paperclip, X, Image as ImageIcon, Loader2, AlertTriangle, Cloud, Wand2, Copy, MoreHorizontal, Clock, Check, Coins, CheckCircle2, XCircle, FileCode, CheckSquare, Circle, Info, ArrowRight } from 'lucide-react';
@@ -255,7 +257,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       for (const upload of newUploads) {
           try {
               const fullBase64 = await fileToBase64(upload.file);
-              const pureBase64 = fullBase64.split(',')[1] || fullBase64;
+              // Use full Base64 Data URI to preserve Mime Type for AI Providers
+              const pureBase64 = fullBase64; 
               let serverUrl = upload.previewUrl; 
               if (onUploadImage) serverUrl = await onUploadImage(upload.file);
               setStagedImages(prev => prev.map(p => p.id === upload.id ? { ...p, base64: pureBase64, serverUrl, uploading: false } : p));

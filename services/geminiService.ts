@@ -90,17 +90,47 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
         let contents: any = prompt;
         if (images.length > 0) {
             const parts: any[] = [];
-            images.forEach(img => {
+            
+            // Parallelize image processing
+            await Promise.all(images.map(async (img) => {
                 let mimeType = 'image/jpeg';
                 let rawBase64 = img;
-                if (img.includes('base64,')) {
+
+                // CRITICAL FIX: Reject blob URLs which are transient and local-only
+                if (img.startsWith('blob:')) {
+                    console.error("Attempted to send Blob URL to Gemini API. This indicates an upload failure or sync issue.", img);
+                    return; // Skip this invalid image
+                }
+
+                // Handle HTTP URLs by fetching them
+                if (img.startsWith('http')) {
+                    try {
+                        const response = await fetch(img);
+                        const blob = await response.blob();
+                        const buffer = await blob.arrayBuffer();
+                        const bytes = new Uint8Array(buffer);
+                        // Convert to base64 manually to avoid browser dependency if running in non-browser env (though this is client-side)
+                        let binary = '';
+                        for (let i = 0; i < bytes.byteLength; i++) {
+                            binary += String.fromCharCode(bytes[i]);
+                        }
+                        rawBase64 = btoa(binary);
+                        mimeType = blob.type || 'image/jpeg';
+                    } catch (e) {
+                        console.error("Failed to fetch image URL for Gemini:", img, e);
+                        // Skip this image or handle error? For now skip pushing part.
+                        return; 
+                    }
+                } else if (img.includes('base64,')) {
                     const split = img.split('base64,');
                     rawBase64 = split[1];
                     if (split[0].includes('png')) mimeType = 'image/png';
                     else if (split[0].includes('webp')) mimeType = 'image/webp';
                 }
+                
                 parts.push({ inlineData: { mimeType, data: rawBase64 } });
-            });
+            }));
+            
             parts.push({ text: prompt });
             contents = { parts };
         }
@@ -160,35 +190,23 @@ const extractJson = (text: string | undefined): any => {
     for (let attempts = 0; attempts < MAX_PARSE_ATTEMPTS; attempts++) {
         try {
             // Attempt 1: Parse the raw candidate directly.
-            // This handles raw JSON, and double-stringified JSON (where the outer layer is a JSON string literal)
             parsedData = JSON.parse(currentCandidate);
             
-            // If it parsed successfully, check its type.
-            // If it's an object or array, we have our JSON. Break.
             if (typeof parsedData === 'object' && parsedData !== null) {
                 break; 
             }
             
-            // If it parsed to a string, it might be double-stringified or a markdown block.
-            // Use this string as the new candidate for the next parse attempt.
             if (typeof parsedData === 'string') {
-                currentCandidate = parsedData.trim(); // Trim again for the inner string
-                // If the inner string is a markdown block, extract its content for the next parse.
-                // This handles cases where JSON is wrapped inside ```json``` or ```html``` etc.
+                currentCandidate = parsedData.trim(); 
                 const markdownMatch = currentCandidate.match(/^```(?:\w+)?\s*([\s\S]*?)\s*```$/i);
                 if (markdownMatch) {
                     currentCandidate = markdownMatch[1].trim();
                 }
-                // Continue to next iteration to parse the new currentCandidate
                 continue; 
             }
-
-            // If parsedData is a number, boolean, etc., it's not the expected JSON object/array.
-            // Break loop and let final check fail.
             break;
 
         } catch (e) {
-            // Parsing failed. Try to isolate JSON from potential surrounding text or malformation.
             const firstBrace = currentCandidate.indexOf('{');
             const lastBrace = currentCandidate.lastIndexOf('}');
             const firstBracket = currentCandidate.indexOf('[');
@@ -204,14 +222,10 @@ const extractJson = (text: string | undefined): any => {
 
             if (foundJsonFragment) {
                 currentCandidate = foundJsonFragment;
-                // If we extracted a fragment, try parsing it in the next loop iteration.
-                // Reset parsedData to null for the new attempt.
                 parsedData = null;
-                continue; // Go to next iteration to try parsing the fragment
+                continue; 
             }
             
-            // If no fragment found, and parsing failed, then it's genuinely not JSON.
-            // Break loop.
             parsedData = null; 
             break;
         }
@@ -222,10 +236,7 @@ const extractJson = (text: string | undefined): any => {
         throw new Error("Failed to parse JSON response. The model output was not valid JSON object or array.");
     }
 
-    // --- Post-parse: Extract markdown from specific string fields ---
-    // Note: Use the stricter sanitizeFileContent from codeGenerator for code fields
     const extractMarkdownIfPresent = (value: string): string => {
-        // Regex to match a markdown code block, optionally with a language specifier
         const innerMarkdownMatch = value.match(/^```(?:\w+)?\s*\n([\s\S]*?)\n```$/);
         return innerMarkdownMatch ? innerMarkdownMatch[1] : value;
     };
@@ -240,14 +251,10 @@ const extractJson = (text: string | undefined): any => {
         const newObj: any = {};
         for (const key in obj) {
             if (Object.prototype.hasOwnProperty.call(obj, key)) {
-                // Apply markdown extraction to 'content', 'sql', 'description', 'message' fields (where code/text might be)
                 if (key === 'content' || key === 'sql' || key === 'description' || key === 'message' || key === 'outputs') { 
                     if (typeof obj[key] === 'string') {
-                        // Use strict sanitizer for fields that are typically code or long text
-                        // Pass empty string as path since we don't have filename context here, just generic sanitization
                         newObj[key] = sanitizeFileContent(obj[key], ""); 
                     } else {
-                        // Recursively process if it's an object/array itself
                         newObj[key] = processObject(obj[key]);
                     }
                 } else {
@@ -263,7 +270,6 @@ const extractJson = (text: string | undefined): any => {
 
 // Renamed keys to 'v3' to force cache busting and bypass broken prompts in DB
 export const PROMPT_KEYS = {
-    // Fix: Quoted property names to avoid 'Cannot find name' errors.
     'DECISION': 'sys_prompt_decision_v3',
     'REQUIREMENTS': 'sys_prompt_requirements_v3',
     'PHASE_PLANNER': 'sys_prompt_phase_planner_v3', 
@@ -271,6 +277,7 @@ export const PROMPT_KEYS = {
     'PLANNER': 'sys_prompt_planner_v3', 
     'BUILDER': 'sys_prompt_builder_v3', 
     'REPAIR': 'sys_prompt_repair_v3',
+    'REPAIR_PLANNER': 'sys_prompt_repair_planner_v3',
     'QA': 'sys_prompt_qa_v3',
     'SQL': 'sys_prompt_sql_v3',
     'NARRATOR': 'sys_prompt_narrator_v3',
@@ -478,6 +485,26 @@ Return STRICT JSON:
 - Literal backslashes (\`\\\`) within the markdown content must be escaped as \`\\\\\\\\\`.
 DO NOT double-escape characters unnecessarily. The HTML/JSX/CSS code INSIDE the markdown block should look as it would normally (e.g., \`lang="en"\` not \`lang=\\"en\\"\`).`,
 
+    REPAIR_PLANNER: `Role: Senior React Repair Engineer
+Task: Fix the provided runtime/build error with the absolute MINIMAL change.
+Input: 
+- Error: {error}
+- Files: {files}
+Constraints:
+- DO NOT rewrite entire files.
+- DO NOT change architecture.
+- FIX ONLY the specific error.
+- Output JSON with patches.
+- Content in patches MUST be valid code (no markdown blocks inside the string).
+Return STRICT JSON:
+{
+  "patches": [
+    { "path": "src/App.tsx", "action": "update", "content": "FULL_UPDATED_FILE_CONTENT_HERE" }
+  ],
+  "explanation": "Briefly explain the fix."
+}
+**CRITICAL JSON GUIDELINE**: The 'content' field must contain the FULL updated file content inside a valid markdown code block. The ENTIRE markdown block (including triple backticks and language specifier) must be treated as a single JSON string value. You MUST ensure that this JSON string value is correctly escaped for JSON syntax.`,
+
     QA: `Role: Final Validation
 Purpose: Catch issues before the user sees them.
 Responsibilities:
@@ -538,6 +565,8 @@ export interface SupervisorCallbacks {
     onSuccess: (code: GeneratedCode, explanation: string, audit: BuildAudit, meta?: any) => Promise<void>;
     onError: (error: string, retries: number) => Promise<void>;
     onFinalError: (error: string, audit?: BuildAudit) => Promise<void>;
+    // New validation bridge
+    waitForPreview?: (timeoutMs: number) => Promise<{success: boolean, error?: string}>;
 }
 
 export class GenerationSupervisor {
@@ -586,31 +615,39 @@ export class GenerationSupervisor {
         
         let sys = await getSystemPrompt(key, sysPromptDefault);
 
-        // Enforce Farsi response if user prompt has Farsi OR system language is set to Farsi
-        const isFarsiPrompt = /[\u0600-\u06FF]/.test(this.userPrompt) || this.lang === 'fa';
+        // Explicit Language Enforcement Logic
+        // Determine language mode from Supervisor state (which is derived from User Settings + Initial Prompt Scan)
+        const isFarsiMode = this.lang === 'fa';
         
-        if (isFarsiPrompt) {
-            const langInstruction = "All user-facing text output in the JSON response (like summaries, explanations, messages, issues, hints, and step titles/descriptions) MUST be in Farsi.";
-            
-            // Fix: Referencing PROMPT_KEYS with string literal keys
-            const keysWithUserText = [
-                PROMPT_KEYS['DECISION'],
-                PROMPT_KEYS['REQUIREMENTS'],
-                PROMPT_KEYS['BUILDER'],
-                PROMPT_KEYS['REPAIR'],
-                PROMPT_KEYS['QA'],
-                PROMPT_KEYS['NARRATOR'],
-                PROMPT_KEYS['PLANNER'],
-                PROMPT_KEYS['PHASE_PLANNER'],
-            ];
+        // Also check prompt for explicit overrides, just in case context shifts
+        const promptHasFarsi = /[\u0600-\u06FF]/.test(this.userPrompt);
+        const effectiveIsFarsi = isFarsiMode || promptHasFarsi;
+        
+        // Fix: Referencing PROMPT_KEYS with string literal keys
+        const keysWithUserText = [
+            PROMPT_KEYS['DECISION'],
+            PROMPT_KEYS['REQUIREMENTS'],
+            PROMPT_KEYS['BUILDER'],
+            PROMPT_KEYS['REPAIR'],
+            PROMPT_KEYS['QA'],
+            PROMPT_KEYS['NARRATOR'],
+            PROMPT_KEYS['PLANNER'],
+            PROMPT_KEYS['PHASE_PLANNER'],
+        ];
 
-            if (keysWithUserText.includes(key)) {
+        if (keysWithUserText.includes(key)) {
+            if (effectiveIsFarsi) {
+                const langInstruction = "All user-facing text output in the JSON response (like summaries, explanations, messages, issues, hints, and step titles/descriptions) MUST be in Farsi (Persian).";
+                sys = langInstruction + '\n' + sys;
+            } else {
+                // Explicitly enforce English to prevent model drifting
+                const langInstruction = "All user-facing text output in the JSON response (like summaries, explanations, messages, issues, hints, and step titles/descriptions) MUST be in English.";
                 sys = langInstruction + '\n' + sys;
             }
         }
         
         const MAX_RETRIES = 3;
-        const STEP_TIMEOUT_MS = 240000; // Increased to 4 minutes per step
+        const STEP_TIMEOUT_MS = 60000; // Reduced to 60s to fail fast on stuck processes and trigger phase retry
 
         let lastError;
         let startTime = Date.now();
@@ -646,6 +683,112 @@ export class GenerationSupervisor {
             }
         }
         throw lastError || new Error(`Step ${key} failed after retries`);
+    }
+
+    public async repair(initialError: string) {
+        const MAX_ATTEMPTS = 5;
+        let currentError = initialError;
+        let attempt = 1;
+        let totalExecutionTime = 0;
+        let totalCredits = 0;
+
+        // Use a persistent message for the repair process
+        const messageId = (await this.callbacks.onBuildMessage('repair_mode', {
+            type: 'build_status',
+            content: this.t('selfHealing'),
+            status: 'working',
+            icon: 'wrench'
+        })).id;
+
+        while (attempt <= MAX_ATTEMPTS) {
+            this.checkAbort();
+
+            await this.callbacks.onBuildMessage('repair_mode', {
+                id: messageId,
+                content: `Repairing... (Attempt ${attempt}/${MAX_ATTEMPTS})\nDetected Issue: ${currentError.substring(0, 100)}...`,
+                status: 'working',
+                icon: 'loader'
+            });
+
+            // 1. Analyze and Plan Patch
+            // Only send relevant files (Entry, App, HTML, Config) to save tokens, or send all if small.
+            // For now, filtering to criticals + recent changes might be smart, but sending all is safer for context.
+            const repairResult = await this.runStep(
+                PROMPT_KEYS['REPAIR_PLANNER'], 
+                JSON.stringify({ error: currentError, files: this.accumulatedFiles }), 
+                DEFAULTS.REPAIR_PLANNER, 
+                messageId
+            );
+            
+            const { patches, explanation } = repairResult.json;
+            totalExecutionTime += repairResult.executionTime;
+            totalCredits += billingService.calculateCredits(repairResult.usage.costUsd);
+
+            if (patches && patches.length > 0) {
+                // 2. Apply Patches (Immutable Update)
+                const cleanPath = (p: string) => p.replace(/^\.\//, '').replace(/^\//, '');
+                const patchMap = new Map<string, FileChange>();
+                
+                patches.forEach((p: FileChange) => {
+                    p.path = cleanPath(p.path);
+                    patchMap.set(p.path, p);
+                });
+                
+                this.accumulatedFiles = this.accumulatedFiles.map(file => {
+                    const normalizedPath = cleanPath(file.path);
+                    if (patchMap.has(normalizedPath)) {
+                        const patch = patchMap.get(normalizedPath)!;
+                        // Sanitize content
+                        const sanitizedContent = sanitizeFileContent(patch.content, normalizedPath);
+                        return { ...file, content: sanitizedContent, path: normalizedPath };
+                    }
+                    return { ...file, path: normalizedPath };
+                });
+
+                // 3. Update UI & Render
+                await this.callbacks.onChunkComplete(
+                    { html: '', javascript: '// Updating...', css: '', explanation: `Applied repair: ${explanation}` },
+                    `Repair Attempt ${attempt}: ${explanation}`,
+                    { files: this.accumulatedFiles }
+                );
+
+                // 4. Validate (Wait for Runtime Feedback)
+                // We need to wait for the iframe to reload and potentially throw an error.
+                if (this.callbacks.waitForPreview) {
+                    // Wait up to 8 seconds for an error to appear
+                    const validation = await this.callbacks.waitForPreview(8000);
+                    
+                    if (validation.success) {
+                        // Success!
+                        await this.callbacks.onBuildMessage('repair_mode', {
+                            id: messageId,
+                            content: `✅ **Repair Successful!**\n\nFixed issue: ${explanation}`,
+                            status: 'completed',
+                            icon: 'check',
+                            executionTimeMs: totalExecutionTime,
+                            creditsUsed: totalCredits
+                        });
+                        return; // Exit Repair Mode
+                    } else {
+                        // Error persisted or new error appeared
+                        currentError = validation.error || "Unknown runtime error persisted";
+                        console.warn(`Repair Attempt ${attempt} failed. New error: ${currentError}`);
+                    }
+                } else {
+                    // No validation callback provided? Assume success or wait for manual trigger.
+                    console.warn("No validation callback provided for repair mode.");
+                    break;
+                }
+            } else {
+                console.warn("AI suggested no patches.");
+                break;
+            }
+
+            attempt++;
+        }
+
+        // If loop finishes without success
+        await this.callbacks.onFinalError(`Auto-fix failed after ${MAX_ATTEMPTS} attempts. Error: ${currentError}`);
     }
 
     public async start() {
@@ -812,129 +955,156 @@ export class GenerationSupervisor {
             for (const phase of phases) {
                 this.checkAbort();
                 
-                const phaseMessageKey = `phase_${phase.id}`;
-                currentMessageId = (await this.callbacks.onBuildMessage(phaseMessageKey, {
-                    type: 'build_phase',
-                    content: this.t('startingPhase', { phaseTitle: phase.title }),
-                    status: 'working',
-                    icon: 'loader',
-                    // Fix: Changed 'progress' to 'currentStepProgress'
-                    currentStepProgress: { current: 0, total: 1, stepName: this.t('planningSteps') }
-                })).id;
+                // Snapshot files state for rollback in case of phase retry
+                const accumulatedFilesSnapshot = JSON.parse(JSON.stringify(this.accumulatedFiles));
                 
-                // PLANNER (acting as FILE_PLAN source of truth)
-                const planContext = {
-                    phase,
-                    design: this.design,
-                    user_request: this.userPrompt,
-                    existing_files: this.accumulatedFiles.map(f => f.path)
-                };
-                const detailedPlanResult = await this.runStep(PROMPT_KEYS['PLANNER'], JSON.stringify(planContext), DEFAULTS.PLANNER, currentMessageId);
-                const detailedPlan = detailedPlanResult.json;
-                const steps = detailedPlan.steps || [];
-                
-                await this.callbacks.onBuildMessage(phaseMessageKey, {
-                    id: currentMessageId,
-                    content: this.t('plannedSteps', { phaseTitle: phase.title }),
-                    // Fix: Changed 'progress' to 'currentStepProgress'
-                    currentStepProgress: { current: 0, total: steps.length, stepName: this.t('executingSteps') },
-                    details: JSON.stringify(detailedPlan, null, 2),
-                    isExpandable: true,
-                });
+                let phaseAttempts = 0;
+                const MAX_PHASE_RETRIES = 2; // Allow 2 retries for the entire phase
+                let phaseSuccess = false;
 
-                // BUILDER (acting as CODE Generator)
-                let completedStepsInPhase = 0;
-                let phaseExecutionTimeMs = 0;
-                let phaseCreditsUsed = 0;
-
-                for (const step of steps) {
-                    this.checkAbort();
-                    
-                    const filePath = step.path || step.file || step.filepath; 
-                    if (!filePath) {
-                        console.warn("Skipping build step due to missing path:", step);
-                        continue;
-                    }
-                    
-                    completedStepsInPhase++;
-                    await this.callbacks.onBuildMessage(phaseMessageKey, {
-                        id: currentMessageId,
-                        content: this.t('buildingPhase', { phaseTitle: phase.title, filePath: filePath }),
-                        // Fix: Changed 'progress' to 'currentStepProgress'
-                        currentStepProgress: { current: completedStepsInPhase, total: steps.length, stepName: step.title },
-                    });
-                    
-                    const builderContext = {
-                        task: step.description || step.title,
-                        file_path: filePath,
-                        design: this.design,
-                        // Provide full content of existing files for context-aware updates
-                        existing_files: this.accumulatedFiles.map(f => ({ path: f.path, content: f.content })),
-                        phase: phase.id
-                    };
-
-                    const codeResResult = await this.runStep(PROMPT_KEYS['BUILDER'], JSON.stringify(builderContext), DEFAULTS.BUILDER, currentMessageId);
-                    const codeRes = codeResResult.json;
-
-                    // Accumulate metrics for the phase
-                    phaseExecutionTimeMs += codeResResult.executionTime;
-                    phaseCreditsUsed += billingService.calculateCredits(codeResResult.usage.costUsd);
-                    
-                    if (codeRes.file_changes && codeRes.file_changes.length > 0) {
-                        // IMMUTABLE UPDATE & AGGRESSIVE PATH NORMALIZATION
-                        const cleanPath = (p: string) => p.replace(/^\.\//, '').replace(/^\//, '');
+                while (phaseAttempts <= MAX_PHASE_RETRIES && !phaseSuccess) {
+                    try {
+                        const phaseMessageKey = `phase_${phase.id}`;
                         
-                        const changesMap = new Map<string, FileChange>();
-                        codeRes.file_changes.forEach((c: FileChange) => {
-                            // --- SANITIZE CONTENT BEFORE STORING ---
-                            c.content = sanitizeFileContent(c.content, c.path);
-                            // ---------------------------------------
+                        // Notify start/retry
+                        if (phaseAttempts > 0) {
+                             await this.callbacks.onBuildMessage(phaseMessageKey, {
+                                type: 'build_status',
+                                content: this.t('buildWarning', { retryMsg: ` Restarting Phase "${phase.title}" (Attempt ${phaseAttempts + 1}/${MAX_PHASE_RETRIES + 1})...` }),
+                                status: 'working',
+                                icon: 'refresh-cw'
+                            });
+                        }
+
+                        currentMessageId = (await this.callbacks.onBuildMessage(phaseMessageKey, {
+                            type: 'build_phase',
+                            content: this.t('startingPhase', { phaseTitle: phase.title }),
+                            status: 'working',
+                            icon: 'loader',
+                            currentStepProgress: { current: 0, total: 1, stepName: this.t('planningSteps') }
+                        })).id;
+                        
+                        // PLANNER (acting as FILE_PLAN source of truth)
+                        const planContext = {
+                            phase,
+                            design: this.design,
+                            user_request: this.userPrompt,
+                            existing_files: this.accumulatedFiles.map(f => f.path)
+                        };
+                        const detailedPlanResult = await this.runStep(PROMPT_KEYS['PLANNER'], JSON.stringify(planContext), DEFAULTS.PLANNER, currentMessageId);
+                        const detailedPlan = detailedPlanResult.json;
+                        const steps = detailedPlan.steps || [];
+                        
+                        await this.callbacks.onBuildMessage(phaseMessageKey, {
+                            id: currentMessageId,
+                            content: this.t('plannedSteps', { phaseTitle: phase.title }),
+                            currentStepProgress: { current: 0, total: steps.length, stepName: this.t('executingSteps') },
+                            details: JSON.stringify(detailedPlan, null, 2),
+                            isExpandable: true,
+                        });
+
+                        // BUILDER (acting as CODE Generator)
+                        let completedStepsInPhase = 0;
+                        let phaseExecutionTimeMs = 0;
+                        let phaseCreditsUsed = 0;
+
+                        for (const step of steps) {
+                            this.checkAbort();
                             
-                            c.path = cleanPath(c.path);
-                            changesMap.set(c.path, c);
-                        });
-                        
-                        let newFiles = this.accumulatedFiles.map(file => {
-                            const normalizedPath = cleanPath(file.path);
-                            if (changesMap.has(normalizedPath)) {
-                                const change = changesMap.get(normalizedPath)!;
-                                changesMap.delete(normalizedPath); 
-                                return { ...file, content: change.content, path: normalizedPath }; 
+                            const filePath = step.path || step.file || step.filepath; 
+                            if (!filePath) {
+                                console.warn("Skipping build step due to missing path:", step);
+                                continue;
                             }
-                            return { ...file, path: normalizedPath };
-                        });
-                        
-                        // Add any completely new files
-                        changesMap.forEach(change => {
-                            newFiles.push({ path: change.path, content: change.content, type: 'file', language: 'typescript' });
-                        });
-                        
-                        this.accumulatedFiles = newFiles; 
-                    }
-                    
-                    // Partial Update
-                    const currentCode = { 
-                        html: '', 
-                        javascript: '// See files', 
-                        css: '', 
-                        explanation: `Built ${filePath}` 
-                    };
-                    await this.callbacks.onChunkComplete(currentCode, `Built ${filePath}`, { files: this.accumulatedFiles } as any);
-                }
+                            
+                            completedStepsInPhase++;
+                            await this.callbacks.onBuildMessage(phaseMessageKey, {
+                                id: currentMessageId,
+                                content: this.t('buildingPhase', { phaseTitle: phase.title, filePath: filePath }),
+                                currentStepProgress: { current: completedStepsInPhase, total: steps.length, stepName: step.title },
+                            });
+                            
+                            const builderContext = {
+                                task: step.description || step.title,
+                                file_path: filePath,
+                                design: this.design,
+                                existing_files: this.accumulatedFiles.map(f => ({ path: f.path, content: f.content })),
+                                phase: phase.id
+                            };
 
-                await this.callbacks.onBuildMessage(phaseMessageKey, {
-                    id: currentMessageId,
-                    content: this.t('phaseComplete', { phaseTitle: phase.title }),
-                    status: 'completed',
-                    icon: 'check',
-                    // Fix: Changed 'progress' to 'currentStepProgress'
-                    currentStepProgress: { current: steps.length, total: steps.length, stepName: this.t('allStepsComplete') },
-                    // Fix: Use accumulated phase metrics
-                    executionTimeMs: phaseExecutionTimeMs,
-                    creditsUsed: phaseCreditsUsed,
-                    details: JSON.stringify(detailedPlan, null, 2),
-                    isExpandable: true,
-                });
+                            const codeResResult = await this.runStep(PROMPT_KEYS['BUILDER'], JSON.stringify(builderContext), DEFAULTS.BUILDER, currentMessageId);
+                            const codeRes = codeResResult.json;
+
+                            phaseExecutionTimeMs += codeResResult.executionTime;
+                            phaseCreditsUsed += billingService.calculateCredits(codeResResult.usage.costUsd);
+                            
+                            if (codeRes.file_changes && codeRes.file_changes.length > 0) {
+                                const cleanPath = (p: string) => p.replace(/^\.\//, '').replace(/^\//, '');
+                                
+                                const changesMap = new Map<string, FileChange>();
+                                codeRes.file_changes.forEach((c: FileChange) => {
+                                    c.content = sanitizeFileContent(c.content, c.path);
+                                    c.path = cleanPath(c.path);
+                                    changesMap.set(c.path, c);
+                                });
+                                
+                                let newFiles = this.accumulatedFiles.map(file => {
+                                    const normalizedPath = cleanPath(file.path);
+                                    if (changesMap.has(normalizedPath)) {
+                                        const change = changesMap.get(normalizedPath)!;
+                                        changesMap.delete(normalizedPath); 
+                                        return { ...file, content: change.content, path: normalizedPath }; 
+                                    }
+                                    return { ...file, path: normalizedPath };
+                                });
+                                
+                                changesMap.forEach(change => {
+                                    newFiles.push({ path: change.path, content: change.content, type: 'file', language: 'typescript' });
+                                });
+                                
+                                this.accumulatedFiles = newFiles; 
+                            }
+                            
+                            // Partial Update
+                            const currentCode = { 
+                                html: '', 
+                                javascript: '// See files', 
+                                css: '', 
+                                explanation: `Built ${filePath}` 
+                            };
+                            await this.callbacks.onChunkComplete(currentCode, `Built ${filePath}`, { files: this.accumulatedFiles } as any);
+                        }
+
+                        await this.callbacks.onBuildMessage(phaseMessageKey, {
+                            id: currentMessageId,
+                            content: this.t('phaseComplete', { phaseTitle: phase.title }),
+                            status: 'completed',
+                            icon: 'check',
+                            currentStepProgress: { current: steps.length, total: steps.length, stepName: this.t('allStepsComplete') },
+                            executionTimeMs: phaseExecutionTimeMs,
+                            creditsUsed: phaseCreditsUsed,
+                            details: JSON.stringify(detailedPlan, null, 2),
+                            isExpandable: true,
+                        });
+                        
+                        phaseSuccess = true;
+
+                    } catch (error: any) {
+                        if (error.message === "ABORTED" || this.signal?.aborted) throw error;
+                        
+                        phaseAttempts++;
+                        console.warn(`Phase ${phase.title} attempt ${phaseAttempts} failed:`, error);
+                        
+                        if (phaseAttempts <= MAX_PHASE_RETRIES) {
+                            // Rollback files
+                            this.accumulatedFiles = JSON.parse(JSON.stringify(accumulatedFilesSnapshot));
+                            // Wait a bit before retry
+                            await new Promise(r => setTimeout(r, 2000));
+                        } else {
+                            throw error; // Rethrow to main catch if retries exhausted
+                        }
+                    }
+                }
                 currentPhaseIdx++;
             }
 

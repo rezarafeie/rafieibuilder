@@ -7,7 +7,7 @@ export const openaiService = {
         model: string, 
         prompt: string, 
         systemInstruction?: string,
-        images?: string[] // array of base64 strings
+        images?: string[] // array of base64 strings OR http urls
     ): Promise<{ text: string, usage: AIUsageResult }> {
         
         const isReasoningModel = model.includes('o1') || model.includes('o3');
@@ -27,10 +27,11 @@ export const openaiService = {
         
         if (images && images.length > 0) {
             images.forEach(img => {
-                // OpenAI requires Data URI format: data:image/jpeg;base64,{base64_image}
-                // If input is already a data URI, use it directly. If raw base64, construct it.
                 let url = img;
-                if (!img.startsWith('data:')) {
+                
+                // If it's NOT a data URI and NOT an HTTP URL, assume it's base64 and wrap it
+                if (!img.startsWith('http') && !img.startsWith('data:')) {
+                    // Default to jpeg if not specified, though usually we try to detect
                     url = `data:image/jpeg;base64,${img}`;
                 }
 
@@ -45,105 +46,84 @@ export const openaiService = {
 
         messages.push({ role: "user", content: userContent });
 
+        // Use Proxy for CORS
+        const PROXY_URL = 'https://corsproxy.io/?';
+        const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
+
         const payload: any = {
-            model: model || "gpt-4o",
-            messages: messages
+            model: model,
+            messages: messages,
+            // O1 models don't support max_tokens or temperature in the same way sometimes, 
+            // but for now we keep defaults or adjust if needed.
+            // Reasoning models might reject temperature.
         };
 
-        if (isReasoningModel) {
-            // o1/o3 models use max_completion_tokens and do not support temperature/response_format in standard ways yet
-            payload.max_completion_tokens = 25000; // High limit for reasoning
-        } else {
-            payload.temperature = 0.2; // Low temp for code generation
+        if (!isReasoningModel) {
+            payload.temperature = 0.2;
             payload.max_tokens = 4096;
-            
-            // Fix: Only enforce JSON object mode if the SYSTEM instruction explicitly asks for it.
-            // We strictly check systemInstruction to avoid triggering this on generic Chat/Router prompts.
-            const systemContext = (systemInstruction || '').toLowerCase();
-            
-            if (systemContext.includes('json')) {
-                payload.response_format = { type: "json_object" };
-                
-                // CRITICAL FIX: OpenAI throws a 400 error if response_format is json_object but the word "JSON"
-                // is not found in the messages. Even if systemInstruction triggered the check, quirks in validation
-                // or case-sensitivity can cause failures. We defensively ensure "JSON" is present.
-                const hasSystemMessage = messages.some(m => m.role === 'system');
-                if (hasSystemMessage) {
-                    // Start from end to find the system message we added
-                    const sysMsg = messages.find(m => m.role === 'system');
-                    if (sysMsg && !sysMsg.content.includes('JSON') && !sysMsg.content.includes('json')) {
-                        sysMsg.content += " (Respond in JSON)";
-                    }
-                } else {
-                    // Fallback if no system message exists (shouldn't happen if systemContext has json, but safe is safe)
-                    messages.unshift({ role: "system", content: "Please output valid JSON." });
-                }
-            }
+        } else {
+            // O1-preview supports max_completion_tokens
+            payload.max_completion_tokens = 8192;
         }
 
-        try {
-            const response = await fetch("https://api.openai.com/v1/chat/completions", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${apiKey}`
-                },
-                body: JSON.stringify(payload)
-            });
+        const response = await fetch(`${PROXY_URL}${encodeURIComponent(OPENAI_URL)}`, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify(payload)
+        });
 
-            if (!response.ok) {
-                const err = await response.json().catch(() => ({ error: { message: response.statusText } }));
-                const errMsg = err.error?.message || response.statusText;
-
-                // Automatic Fallback for missing/restricted models (e.g. o1-mini 404)
-                if ((response.status === 404 || response.status === 403) && isReasoningModel) {
-                    console.warn(`Model ${model} failed (${response.status}). Falling back to gpt-4o.`);
-                    return this.generateContent(apiKey, 'gpt-4o', prompt, systemInstruction, images);
+        if (!response.ok) {
+            const errorText = await response.text();
+            let errorMessage = `OpenAI API Error: ${response.status} ${response.statusText}`;
+            try {
+                const errorJson = JSON.parse(errorText);
+                if (errorJson.error && errorJson.error.message) {
+                    errorMessage = errorJson.error.message;
                 }
-
-                throw new Error(`OpenAI Error: ${errMsg}`);
-            }
-
-            const data = await response.json();
-            const text = data.choices[0]?.message?.content || "";
-            
-            // Calculate Cost (Estimate based on model pricing tiers)
-            // Prices per 1M tokens (USD)
-            let inputPrice = 0.50; // Default / low tier
-            let outputPrice = 1.50;
-
-            if (model.includes('gpt-5') || model.includes('gpt-4.1') || model.includes('o1')) {
-                 inputPrice = 15.00; // o1-preview pricing (approx)
-                 outputPrice = 60.00;
-                 if (model.includes('mini')) {
-                     inputPrice = 3.00;
-                     outputPrice = 12.00;
-                 }
-            } else if (model.includes('gpt-4') && !model.includes('mini')) {
-                 inputPrice = 5.00; // GPT-4o
-                 outputPrice = 15.00;
-            } else if (model.includes('mini')) {
-                 inputPrice = 0.15;
-                 outputPrice = 0.60;
-            }
-
-            const inputTokens = data.usage?.prompt_tokens || 0;
-            const outputTokens = data.usage?.completion_tokens || 0;
-            
-            const cost = ((inputTokens / 1000000) * inputPrice) + ((outputTokens / 1000000) * outputPrice);
-
-            return {
-                text,
-                usage: {
-                    promptTokens: inputTokens,
-                    completionTokens: outputTokens,
-                    costUsd: cost,
-                    provider: 'openai',
-                    model
-                }
-            };
-        } catch (e: any) {
-            throw e; // Supervisor will catch this
+            } catch (e) {}
+            throw new Error(errorMessage);
         }
+
+        const data = await response.json();
+        const text = data.choices[0]?.message?.content || "";
+        
+        // Usage
+        const usage = data.usage || {};
+        const inputTokens = usage.prompt_tokens || 0;
+        const outputTokens = usage.completion_tokens || 0;
+
+        // Approximate Pricing (Fallback if not provided by API)
+        // GPT-4o: Input $5/1M, Output $15/1M
+        // O1-preview: Input $15/1M, Output $60/1M
+        // O1-mini: Input $3/1M, Output $12/1M
+        // GPT-4o-mini: Input $0.15/1M, Output $0.60/1M
+        
+        let inputPrice = 5.0; 
+        let outputPrice = 15.0;
+
+        if (model.includes('mini')) {
+            if (model.includes('o1')) { inputPrice = 3.0; outputPrice = 12.0; }
+            else { inputPrice = 0.15; outputPrice = 0.60; }
+        } else if (model.includes('o1')) {
+            inputPrice = 15.0; outputPrice = 60.0;
+        } else if (model.includes('gpt-3.5')) {
+            inputPrice = 0.5; outputPrice = 1.5;
+        }
+
+        const cost = ((inputTokens / 1_000_000) * inputPrice) + ((outputTokens / 1_000_000) * outputPrice);
+
+        return {
+            text,
+            usage: {
+                promptTokens: inputTokens,
+                completionTokens: outputTokens,
+                costUsd: cost,
+                provider: 'openai',
+                model: model
+            }
+        };
     }
 };

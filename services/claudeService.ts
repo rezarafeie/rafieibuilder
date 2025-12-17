@@ -7,7 +7,7 @@ export const claudeService = {
         model: string,
         prompt: string,
         systemInstruction?: string,
-        images?: string[] // base64 strings (raw or data URI)
+        images?: string[] // base64 strings (raw or data URI) or HTTP URLs
     ): Promise<{ text: string, usage: AIUsageResult }> {
         // Anthropic API does not support CORS for browser requests, so we use a proxy.
         const PROXY_URL = 'https://corsproxy.io/?';
@@ -17,12 +17,32 @@ export const claudeService = {
         
         // Handle Images
         if (images && images.length > 0) {
-            images.forEach(img => {
+            await Promise.all(images.map(async (img) => {
                 let mediaType = "image/jpeg";
                 let rawBase64 = img;
 
-                // 1. Check for Data URI prefix and extract
-                if (img.includes('base64,')) {
+                // 1. Check if HTTP URL - fetch and convert
+                if (img.startsWith('http')) {
+                    try {
+                        const response = await fetch(img);
+                        const blob = await response.blob();
+                        const buffer = await blob.arrayBuffer();
+                        const bytes = new Uint8Array(buffer);
+                        let binary = '';
+                        for (let i = 0; i < bytes.byteLength; i++) {
+                            binary += String.fromCharCode(bytes[i]);
+                        }
+                        rawBase64 = btoa(binary);
+                        if (blob.type.includes('png')) mediaType = 'image/png';
+                        else if (blob.type.includes('gif')) mediaType = 'image/gif';
+                        else if (blob.type.includes('webp')) mediaType = 'image/webp';
+                    } catch(e) {
+                        console.error("Failed to fetch image URL for Claude", e);
+                        return; // Skip this image
+                    }
+                }
+                // 2. Check for Data URI prefix and extract
+                else if (img.includes('base64,')) {
                     const parts = img.split('base64,');
                     rawBase64 = parts[1];
                     // Try to extract mime type from the prefix
@@ -31,7 +51,7 @@ export const claudeService = {
                     else if (prefix.includes('image/gif')) mediaType = 'image/gif';
                     else if (prefix.includes('image/webp')) mediaType = 'image/webp';
                 } else {
-                    // 2. Fallback to magic bytes if no prefix
+                    // 3. Fallback to magic bytes if no prefix
                     if (img.startsWith("iVBORw")) mediaType = "image/png";
                     else if (img.startsWith("R0lGOD")) mediaType = "image/gif";
                     else if (img.startsWith("UklGR")) mediaType = "image/webp";
@@ -45,7 +65,7 @@ export const claudeService = {
                         data: rawBase64
                     }
                 });
-            });
+            }));
         }
 
         // Add Text Prompt

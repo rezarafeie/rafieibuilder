@@ -57,7 +57,7 @@ const PromptInputBox: React.FC<PromptInputBoxProps> = ({ onSendMessage, isThinki
               id: crypto.randomUUID(),
               file,
               previewUrl: URL.createObjectURL(file),
-              base64: base64.split(',')[1], // Send only the base64 part
+              base64: base64, // Send full data URI
           };
       });
       

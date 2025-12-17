@@ -1,4 +1,6 @@
 
+
+
 // ... existing imports
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { User, Project, RafieiCloudProject, ProjectFile, Domain, CreditLedgerEntry, FinancialStats, WebhookLog, SystemLog, CreditTransaction, AdminMetric, BuildState, BuildAudit, GeneratedCode, Message } from '../types';
@@ -43,6 +45,17 @@ export const fileToBase64 = (file: File): Promise<string> => {
     reader.onload = () => resolve(reader.result as string);
     reader.onerror = error => reject(error);
   });
+};
+
+const dataURItoBlob = (dataURI: string): Blob => {
+    const byteString = atob(dataURI.split(',')[1]);
+    const mimeString = dataURI.split(',')[0].split(':')[1].split(';')[0];
+    const ab = new ArrayBuffer(byteString.length);
+    const ia = new Uint8Array(ab);
+    for (let i = 0; i < byteString.length; i++) {
+        ia[i] = byteString.charCodeAt(i);
+    }
+    return new Blob([ab], {type: mimeString});
 };
 
 const mapSupabaseUser = (u: SupabaseUser | null): User | null => {
@@ -309,8 +322,45 @@ export const cloudService = {
         await supabase.from('projects').delete().eq('id', id);
     },
 
+    async uploadBase64Image(userId: string, base64Data: string): Promise<string> {
+        try {
+            const blob = dataURItoBlob(base64Data);
+            const ext = blob.type.split('/')[1] || 'png';
+            const filename = `${userId}/${crypto.randomUUID()}.${ext}`;
+            
+            const { data, error } = await supabase.storage.from('chat_images').upload(filename, blob);
+            
+            if (error) {
+                throw error;
+            }
+            
+            const { data: publicData } = supabase.storage.from('chat_images').getPublicUrl(filename);
+            return publicData.publicUrl;
+        } catch (error) {
+            console.error("Failed to upload base64 image:", error);
+            throw error;
+        }
+    },
+
     // Fast creation for immediate feedback
     async createProjectSkeleton(user: User, prompt: string, images: {url: string, base64: string}[]): Promise<string> {
+        // Upload images first to ensure we have valid URLs instead of Blobs
+        const processedImages: string[] = [];
+        
+        for (const img of images) {
+            if (img.base64 && !img.base64.startsWith('http')) {
+                try {
+                    console.log("Uploading initial image...");
+                    const publicUrl = await this.uploadBase64Image(user.id, img.base64);
+                    processedImages.push(publicUrl);
+                } catch (e) {
+                    console.warn("Failed to upload initial image, skipping.", e);
+                }
+            } else if (img.url && !img.url.startsWith('blob:')) {
+                processedImages.push(img.url);
+            }
+        }
+
         const newProject: Project = {
             id: crypto.randomUUID(),
             userId: user.id,
@@ -325,7 +375,7 @@ export const cloudService = {
                 type: 'user_input', // Set specific type
                 content: prompt, // Content is now optional in Message, but provided here
                 timestamp: Date.now(),
-                images: images.map(i => i.url)
+                images: processedImages
             }],
             status: 'idle',
             buildState: null
@@ -370,6 +420,186 @@ export const cloudService = {
     },
 
     // --- BUILD PROCESS ---
+    
+    // Internal helper for common Supervisor callbacks
+    createSupervisorCallbacks(currentProject: Project, updateLocalState: any, createOrUpdateBuildMessage: any, signal: AbortSignal, lang: Language) {
+        const t = (key: keyof typeof translations['en'], vars?: Record<string, string>) => {
+            let str = (translations[lang] || translations['en'])[key] || key;
+            if (vars) {
+                Object.entries(vars).forEach(([k, v]) => {
+                    str = str.replace(`{${k}}`, v ?? '');
+                });
+            }
+            return str;
+        };
+
+        return {
+            onPlanUpdate: async (phases: any) => {
+                if (signal.aborted) return;
+                const bs = currentProject.buildState || {} as any;
+                const updated = updateLocalState({ 
+                    buildState: { ...bs, phases, plan: phases.map((p: any) => p.title) } 
+                });
+                
+                await createOrUpdateBuildMessage('build_plan', {
+                    type: 'build_plan',
+                    content: t('buildPlanTitle'),
+                    planData: phases.map((p: any) => ({ title: p.title, status: 'pending' })),
+                    status: 'completed',
+                    icon: 'check',
+                    isExpandable: true,
+                    details: JSON.stringify(phases, null, 2)
+                });
+
+                try { await this.saveProject(updated); } catch(e) { console.warn("Background save failed (Plan Update):", e); }
+            },
+            onMessage: async (msg: any) => {
+                if (signal.aborted) return;
+                let meta = {};
+                if (msg.requiresAction === 'CONNECT_DATABASE') {
+                    meta = { requires_database: true };
+                }
+                const updatedMessages = [...currentProject.messages, msg];
+                const updated = updateLocalState({ messages: updatedMessages }, meta);
+                try { await this.saveProject(updated); } catch(e) { console.warn("Background save failed (Narrator Message):", e); }
+            },
+            onBuildMessage: createOrUpdateBuildMessage, 
+            onPhaseStart: async (index: number, phase: any) => {
+                if (signal.aborted) return;
+                const phaseTitle = phase.key ? t(phase.key as any) : phase.text || 'Untitled Phase';
+                const bs = currentProject.buildState || {} as any;
+                if(bs.phases && bs.phases[index]) bs.phases[index].status = 'active';
+                updateLocalState({ 
+                    buildState: { ...bs, currentPhaseIndex: index, currentStep: 0 } 
+                });
+                
+                await createOrUpdateBuildMessage(`phase_${index}`, {
+                    type: 'build_phase',
+                    content: t('buildPhaseStart', { phaseTitle: phaseTitle }),
+                    status: 'working',
+                    icon: 'loader',
+                    currentStepProgress: { current: 0, total: 1, stepName: "Starting..." }
+                });
+            },
+            onPhaseComplete: async (index: number) => {
+                if (signal.aborted) return;
+                const bs = currentProject.buildState || {} as any;
+                if(bs.phases && bs.phases[index]) bs.phases[index].status = 'completed';
+                const updated = updateLocalState({ buildState: bs });
+                
+                await createOrUpdateBuildMessage(`phase_${index}`, {
+                    type: 'build_phase',
+                    content: bs.phases?.[index]?.title ? `${bs.phases[index].title} completed.` : "Phase completed.",
+                    status: 'completed',
+                    icon: 'check',
+                    currentStepProgress: { current: 1, total: 1, stepName: "Completed" }
+                });
+
+                try { await this.saveProject(updated); } catch(e) { console.warn("Background save failed (Phase Complete):", e); }
+            },
+            onStepStart: async (phaseIndex: number, step: any) => {
+                if (signal.aborted) return;
+                const stepName = step.key ? t(step.key as any, step.vars) : step.text || 'Untitled Step';
+                const bs = currentProject.buildState || {} as any;
+                const logs = bs.logs || [];
+                updateLocalState({ buildState: { ...bs, logs: [...logs, stepName] } });
+                
+                await createOrUpdateBuildMessage(`phase_${phaseIndex}`, {
+                    type: 'build_phase',
+                    currentStepProgress: { 
+                        current: bs.currentStep,
+                        total: bs.totalSteps, 
+                        stepName: stepName
+                    },
+                    status: 'working',
+                    icon: 'loader'
+                });
+            },
+            onStepComplete: async (phaseIndex: number, stepKeyOrName: string) => {
+                if (signal.aborted) return;
+                const stepName = t(stepKeyOrName as any) || stepKeyOrName;
+                const bs = currentProject.buildState || {} as any;
+                updateLocalState({ buildState: { ...bs, lastCompletedStep: phaseIndex, currentStep: (bs.currentStep || 0) + 1 } });
+                
+                await createOrUpdateBuildMessage(`phase_${phaseIndex}`, {
+                    type: 'build_phase',
+                    currentStepProgress: { 
+                        current: (bs.currentStep || 0) + 1,
+                        total: bs.totalSteps,
+                        stepName: stepName
+                    },
+                    status: 'working', 
+                    icon: 'loader'
+                });
+            },
+            onChunkComplete: async (code: any, explanation: string, meta: any) => {
+                if (signal.aborted) return;
+                const updates: Partial<Project> = { code, status: 'generating' as const };
+                if (meta?.files) updates.files = meta.files;
+                updateLocalState(updates);
+            },
+            onSuccess: async (code: any, explanation: string, audit: any, meta: any) => {
+                if (signal.aborted) return;
+                
+                const updates: Partial<Project> = { 
+                    code, 
+                    status: 'idle' as const, 
+                    buildState: { ...currentProject.buildState, error: null, audit } as any
+                };
+                if (meta?.files) updates.files = meta.files;
+                updateLocalState(updates);
+
+                await createOrUpdateBuildMessage('final_summary', {
+                    type: 'final_summary',
+                    content: explanation, 
+                    status: 'completed',
+                    icon: 'check',
+                    isExpandable: true,
+                    details: JSON.stringify(audit, null, 2)
+                });
+
+                try { await this.saveProject(currentProject); } catch(e) { console.warn("Background save failed (Success):", e); }
+            },
+            onError: async (error: string, retries: number) => {
+                if (signal.aborted) return;
+                const bs = currentProject.buildState || {} as any;
+                
+                updateLocalState({ 
+                    buildState: { ...bs, error: `Error: ${error} (Retrying... ${retries} attempts left)` } as any 
+                });
+
+                const retryMsg = retries > 0 ? `\n🔄 Retrying step (${4 - retries} of 3)...` : '';
+                await createOrUpdateBuildMessage('build_warning', {
+                    type: 'build_status',
+                    content: t('buildWarning', { retryMsg }),
+                    status: 'working',
+                    icon: 'warning',
+                    isExpandable: true,
+                    details: error
+                });
+            },
+            onFinalError: async (error: string, audit: any) => {
+                if (signal.aborted) return;
+                
+                const updated = updateLocalState({ 
+                    status: 'failed' as const, 
+                    buildState: { ...currentProject.buildState, error, audit } as any
+                });
+
+                await createOrUpdateBuildMessage('build_error_final', {
+                    type: 'build_error',
+                    content: t('buildError', { error }),
+                    status: 'failed',
+                    icon: 'x',
+                    isExpandable: true,
+                    details: JSON.stringify(audit || { error: error }, null, 2)
+                });
+                
+                try { await this.saveProject(updated); } catch(e) { console.warn("Background save failed (Final Error):", e); }
+            }
+        };
+    },
+
     async triggerBuild(
         project: Project, 
         prompt: string, 
@@ -399,7 +629,6 @@ export const cloudService = {
             return str;
         };
 
-        // This map keeps track of the actual message IDs for each logical key, preventing duplication
         const messageMap: Record<string, string> = {};
 
         const updateLocalState = (updates: Partial<Project>, meta?: any) => {
@@ -421,10 +650,10 @@ export const cloudService = {
                 updatedMessages[existingMessageIndex] = {
                     ...existingMsg,
                     ...message,
-                    id: msgId, // Ensure ID is consistent
-                    timestamp: Date.now(), // Update timestamp to show recency
-                    role: 'assistant', // Always assistant for build messages
-                    type: message.type || existingMsg.type // Keep existing type if not overridden
+                    id: msgId, 
+                    timestamp: Date.now(), 
+                    role: 'assistant', 
+                    type: message.type || existingMsg.type 
                 };
             } else {
                 // Create new message
@@ -433,15 +662,13 @@ export const cloudService = {
                     role: 'assistant',
                     timestamp: Date.now(),
                     status: 'pending',
-                    // Default content for new message if not explicitly provided (important with optional `content`)
                     content: message.content || '', 
                     ...message,
                 };
                 updatedMessages.push(newMsg);
             }
-            messageMap[logicalKey] = msgId; // Store/update mapping
+            messageMap[logicalKey] = msgId; 
 
-            // Ensure we pass meta if this is a blocking action
             let meta = {};
             if (message.requiresAction === 'CONNECT_DATABASE') {
                 meta = { requires_database: true };
@@ -453,10 +680,9 @@ export const cloudService = {
             } catch(e) { 
                 console.warn("Background save failed (Build Message):", e); 
             }
-            return updatedMessages.find(m => m.id === msgId)!; // Return the full updated message
+            return updatedMessages.find(m => m.id === msgId)!; 
         };
 
-        // --- Initial Build Intro Message ---
         await createOrUpdateBuildMessage('build_intro', {
             type: 'build_status',
             content: t('buildIntro'),
@@ -464,195 +690,100 @@ export const cloudService = {
             icon: 'sparkles'
         });
 
-        // Ensure the project state (especially cloud connection status) is persisted
-        // before starting the supervisor. This is CRITICAL for the supervisor to get the latest info.
         await this.saveProject(currentProject);
+
+        const callbacks = this.createSupervisorCallbacks(currentProject, updateLocalState, createOrUpdateBuildMessage, signal, lang);
 
         const supervisor = new GenerationSupervisor(
             currentProject,
             prompt,
             supervisorImgs,
-            {
-                onPlanUpdate: async (phases) => {
-                    if (signal.aborted) return;
-                    const bs = currentProject.buildState || {} as any;
-                    const updated = updateLocalState({ 
-                        buildState: { ...bs, phases, plan: phases.map(p => p.title) } 
-                    });
-                    
-                    await createOrUpdateBuildMessage('build_plan', {
-                        type: 'build_plan',
-                        content: t('buildPlanTitle'),
-                        planData: phases.map(p => ({ title: p.title, status: 'pending' })),
-                        status: 'completed',
-                        icon: 'check',
-                        isExpandable: true,
-                        details: JSON.stringify(phases, null, 2)
-                    });
-
-                    try { await this.saveProject(updated); } catch(e) { console.warn("Background save failed (Plan Update):", e); }
-                },
-                onMessage: async (msg) => {
-                    if (signal.aborted) return;
-                    let meta = {};
-                    if (msg.requiresAction === 'CONNECT_DATABASE') {
-                        meta = { requires_database: true };
-                    }
-                    // This is for custom one-off messages, e.g., action_required
-                    const updatedMessages = [...currentProject.messages, msg];
-                    const updated = updateLocalState({ messages: updatedMessages }, meta);
-                    try { await this.saveProject(updated); } catch(e) { console.warn("Background save failed (Narrator Message):", e); }
-                },
-                onBuildMessage: createOrUpdateBuildMessage, // Pass the new helper
-                onPhaseStart: async (index, phase) => {
-                    if (signal.aborted) return;
-                    const phaseTitle = phase.key ? t(phase.key as any) : phase.text || 'Untitled Phase';
-                    const bs = currentProject.buildState || {} as any;
-                    if(bs.phases && bs.phases[index]) bs.phases[index].status = 'active';
-                    updateLocalState({ 
-                        buildState: { ...bs, currentPhaseIndex: index, currentStep: 0 } // Reset step counter for new phase
-                    });
-                    
-                    // Create/update phase message
-                    await createOrUpdateBuildMessage(`phase_${index}`, {
-                        type: 'build_phase',
-                        content: t('buildPhaseStart', { phaseTitle: phaseTitle }),
-                        status: 'working',
-                        icon: 'loader',
-                        // Fix: Changed 'progress' to 'currentStepProgress'
-                        currentStepProgress: { current: 0, total: 1, stepName: "Starting..." }
-                    });
-                },
-                onPhaseComplete: async (index) => {
-                    if (signal.aborted) return;
-                    const bs = currentProject.buildState || {} as any;
-                    if(bs.phases && bs.phases[index]) bs.phases[index].status = 'completed';
-                    const updated = updateLocalState({ buildState: bs });
-                    
-                    // Update phase message to completed
-                    await createOrUpdateBuildMessage(`phase_${index}`, {
-                        type: 'build_phase',
-                        content: bs.phases?.[index]?.title ? `${bs.phases[index].title} completed.` : "Phase completed.",
-                        status: 'completed',
-                        icon: 'check',
-                        // Fix: Changed 'progress' to 'currentStepProgress'
-                        currentStepProgress: { current: 1, total: 1, stepName: "Completed" }
-                    });
-
-                    try { await this.saveProject(updated); } catch(e) { console.warn("Background save failed (Phase Complete):", e); }
-                },
-                onStepStart: async (phaseIndex, step) => {
-                    if (signal.aborted) return;
-                    const stepName = step.key ? t(step.key as any, step.vars) : step.text || 'Untitled Step';
-                    const bs = currentProject.buildState || {} as any;
-                    const logs = bs.logs || [];
-                    updateLocalState({ buildState: { ...bs, logs: [...logs, stepName] } });
-                    
-                    // Update the current phase message with step progress
-                    await createOrUpdateBuildMessage(`phase_${phaseIndex}`, {
-                        type: 'build_phase', // Keep type as phase
-                        // Content will be updated by supervisor directly
-                        currentStepProgress: { // New field to track current step in phase
-                            current: bs.currentStep,
-                            total: bs.totalSteps, // supervisor will update total steps
-                            stepName: stepName
-                        },
-                        status: 'working',
-                        icon: 'loader'
-                    });
-                },
-                onStepComplete: async (phaseIndex, stepKeyOrName) => {
-                    if (signal.aborted) return;
-                    const stepName = t(stepKeyOrName as any) || stepKeyOrName;
-                    const bs = currentProject.buildState || {} as any;
-                    updateLocalState({ buildState: { ...bs, lastCompletedStep: phaseIndex, currentStep: (bs.currentStep || 0) + 1 } });
-                    
-                    // Update the current phase message with step progress
-                    await createOrUpdateBuildMessage(`phase_${phaseIndex}`, {
-                        type: 'build_phase', // Keep type as phase
-                        // Content will be updated by supervisor directly
-                        currentStepProgress: { // New field to track current step in phase
-                            current: (bs.currentStep || 0) + 1,
-                            total: bs.totalSteps,
-                            stepName: stepName
-                        },
-                        status: 'working', // Still working on the phase
-                        icon: 'loader'
-                    });
-                },
-                onChunkComplete: async (code, explanation, meta) => {
-                    if (signal.aborted) return;
-                    const updates: Partial<Project> = { code, status: 'generating' as const };
-                    if (meta?.files) updates.files = meta.files;
-                    updateLocalState(updates);
-                    // This no longer sends a chat message
-                },
-                onSuccess: async (code, explanation, audit, meta) => {
-                    if (signal.aborted) return;
-                    
-                    const updates: Partial<Project> = { 
-                        code, 
-                        status: 'idle' as const, 
-                        buildState: { ...currentProject.buildState, error: null, audit } as any
-                    };
-                    if (meta?.files) updates.files = meta.files;
-                    updateLocalState(updates);
-
-                    await createOrUpdateBuildMessage('final_summary', {
-                        type: 'final_summary',
-                        content: explanation, // Use the dynamic summary passed from supervisor
-                        status: 'completed',
-                        icon: 'check',
-                        isExpandable: true,
-                        details: JSON.stringify(audit, null, 2)
-                    });
-
-                    try { await this.saveProject(currentProject); } catch(e) { console.warn("Background save failed (Success):", e); }
-                },
-                onError: async (error, retries) => {
-                    if (signal.aborted) return;
-                    const bs = currentProject.buildState || {} as any;
-                    const currentLogs = bs.logs || [];
-                    
-                    updateLocalState({ 
-                        buildState: { ...bs, error: `Error: ${error} (Retrying... ${retries} attempts left)` } as any 
-                    });
-
-                    const retryMsg = retries > 0 ? `\n🔄 Retrying step (${4 - retries} of 3)...` : '';
-                    await createOrUpdateBuildMessage('build_warning', {
-                        type: 'build_status',
-                        content: t('buildWarning', { retryMsg }),
-                        status: 'working', // Keep working for retries
-                        icon: 'warning',
-                        isExpandable: true,
-                        details: error
-                    });
-                },
-                onFinalError: async (error, audit) => {
-                    if (signal.aborted) return;
-                    
-                    const updated = updateLocalState({ 
-                        status: 'failed' as const, 
-                        buildState: { ...currentProject.buildState, error, audit } as any
-                    });
-
-                    await createOrUpdateBuildMessage('build_error_final', {
-                        type: 'build_error',
-                        content: t('buildError', { error }),
-                        status: 'failed',
-                        icon: 'x',
-                        isExpandable: true,
-                        details: JSON.stringify(audit || { error: error }, null, 2)
-                    });
-                    
-                    try { await this.saveProject(updated); } catch(e) { console.warn("Background save failed (Final Error):", e); }
-                }
-            },
+            callbacks,
             signal,
-            lang // Pass the determined language to the supervisor
+            lang
         );
 
         supervisor.start().catch(console.error);
+    },
+
+    async triggerRepair(
+        project: Project, 
+        error: string,
+        onUpdate: (p: Project, meta?: any) => void,
+        waitForPreview: (ms: number) => Promise<{success: boolean, error?: string}>
+    ) {
+        if (this.abortController) {
+            this.abortController.abort();
+        }
+        this.abortController = new AbortController();
+        const signal = this.abortController.signal;
+
+        let currentProject = { ...project };
+        const userLang = getCurrentLanguage();
+        const lang: Language = userLang; // Force system language for repairs usually, or auto-detect from project messages if needed
+
+        const messageMap: Record<string, string> = {};
+
+        const updateLocalState = (updates: Partial<Project>, meta?: any) => {
+            currentProject = { ...currentProject, ...updates };
+            onUpdate(currentProject, meta);
+            return currentProject;
+        };
+
+        const createOrUpdateBuildMessage = async (logicalKey: string, message: Partial<Message>): Promise<Message> => {
+            if (signal.aborted) throw new Error("ABORTED");
+
+            const existingMessageIndex = currentProject.messages.findIndex(m => m.id === messageMap[logicalKey]);
+            let updatedMessages = [...currentProject.messages];
+            let msgId = messageMap[logicalKey] || crypto.randomUUID();
+
+            if (existingMessageIndex !== -1) {
+                const existingMsg = updatedMessages[existingMessageIndex];
+                updatedMessages[existingMessageIndex] = {
+                    ...existingMsg,
+                    ...message,
+                    id: msgId, 
+                    timestamp: Date.now(), 
+                    role: 'assistant', 
+                    type: message.type || existingMsg.type 
+                };
+            } else {
+                const newMsg: Message = {
+                    id: msgId,
+                    role: 'assistant',
+                    timestamp: Date.now(),
+                    status: 'pending',
+                    content: message.content || '', 
+                    ...message,
+                };
+                updatedMessages.push(newMsg);
+            }
+            messageMap[logicalKey] = msgId; 
+
+            const updated = updateLocalState({ messages: updatedMessages });
+            try { 
+                await this.saveProject(updated); 
+            } catch(e) { 
+                console.warn("Background save failed (Repair Message):", e); 
+            }
+            return updatedMessages.find(m => m.id === msgId)!; 
+        };
+
+        const callbacks = this.createSupervisorCallbacks(currentProject, updateLocalState, createOrUpdateBuildMessage, signal, lang);
+        
+        // Enhance callbacks with the wait function
+        callbacks.waitForPreview = waitForPreview;
+
+        const supervisor = new GenerationSupervisor(
+            currentProject,
+            "", // No prompt needed for repair, error is context
+            [],
+            callbacks,
+            signal,
+            lang
+        );
+
+        supervisor.repair(error).catch(console.error);
     },
 
     stopBuild(projectId: string) {
