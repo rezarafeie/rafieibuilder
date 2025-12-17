@@ -1,4 +1,5 @@
 
+
 export interface GeneratedCode {
   html: string;
   javascript: string;
@@ -283,4 +284,15 @@ export interface QAJSON {
   status: 'pass' | 'fail';
   issues: { type: string; message: string; file: string; hint: string }[];
   patches?: FileChange[];
+}
+
+// Added AIDebugLog to fix import error in geminiService.ts
+export interface AIDebugLog {
+  id: string;
+  timestamp: number;
+  stepKey: string;
+  model: string;
+  systemInstruction: string;
+  prompt: string;
+  response: string;
 }

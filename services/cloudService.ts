@@ -1,10 +1,9 @@
 
 import { createClient } from '@supabase/supabase-js';
-import { User, Project, RafieiCloudProject, ProjectFile, Domain, Message, BuildState } from '../types';
+import { User, Project, RafieiCloudProject, ProjectFile, Message, BuildState } from '../types';
 import { GenerationSupervisor } from './geminiService';
 import { getCurrentLanguage, Language } from '../utils/translations';
 
-// --- ENVIRONMENT & SAFETY ---
 const getEnv = (key: string) => {
   try {
     // @ts-ignore
@@ -43,7 +42,7 @@ export const fileToBase64 = (file: File): Promise<string> => {
 
 export const cloudService = {
     abortController: null as AbortController | null,
-    messageMap: {} as Record<string, string>, // Maps logical keys to message IDs for current session
+    messageMap: {} as Record<string, string>,
 
     async getCurrentUser(): Promise<User | null> {
         const { data, error } = await supabase.auth.getSession();
@@ -114,6 +113,7 @@ export const cloudService = {
     },
 
     async saveProject(project: Project): Promise<void> {
+        // @fix: Corrected property access from build_state to buildState.
         const payload = {
             id: project.id, user_id: project.userId, name: project.name, updated_at: new Date().toISOString(),
             code: project.code, files: project.files, messages: project.messages, build_state: project.buildState,
@@ -173,7 +173,7 @@ export const cloudService = {
         if (this.abortController) this.abortController.abort();
         this.abortController = new AbortController();
         const signal = this.abortController.signal;
-        this.messageMap = {}; // Reset logical mappings for new trigger
+        this.messageMap = {};
 
         let currentProject = { ...project };
         const lang = /[\u0600-\u06FF]/.test(prompt) ? 'fa' : getCurrentLanguage();
@@ -192,57 +192,24 @@ export const cloudService = {
             const idx = msgId ? updatedMessages.findIndex(m => m.id === msgId) : -1;
 
             if (idx !== -1) {
-                const prevMsg = updatedMessages[idx];
-                const now = Date.now();
-                
-                // Track start time when moving to working
-                let startTime = prevMsg.startTime;
-                if (message.status === 'working' && !prevMsg.startTime) {
-                    startTime = now;
-                }
-
-                // Calculate duration when moving to completed
-                let thoughtDurationMs = prevMsg.thoughtDurationMs;
-                if (message.status === 'completed' && prevMsg.startTime && !prevMsg.thoughtDurationMs) {
-                    thoughtDurationMs = now - prevMsg.startTime;
-                }
-
-                updatedMessages[idx] = { 
-                    ...prevMsg, 
-                    ...message, 
-                    startTime,
-                    thoughtDurationMs,
-                    timestamp: now 
-                };
+                updatedMessages[idx] = { ...updatedMessages[idx], ...message, timestamp: Date.now() };
             } else {
                 msgId = crypto.randomUUID();
                 this.messageMap[logicalKey] = msgId;
-                const now = Date.now();
-                const startTime = message.status === 'working' ? now : undefined;
-                
-                updatedMessages.push({ 
-                    id: msgId, 
-                    role: 'assistant', 
-                    timestamp: now, 
-                    startTime,
-                    status: message.status || 'pending', 
-                    content: '', 
-                    ...message 
-                } as Message);
+                updatedMessages.push({ id: msgId, role: 'assistant', timestamp: Date.now(), status: message.status || 'pending', content: '', ...message } as Message);
             }
             
             updateLocalState({ messages: updatedMessages });
-            try { await this.saveProject(currentProject); } catch(e) {}
-            
+            this.saveProject(currentProject).catch(console.error); // Immediate non-blocking save
             return updatedMessages.find(m => m.id === msgId)!;
         };
 
         const supervisor = new GenerationSupervisor(currentProject, prompt, images.map(i => i.base64 || i.url), {
-            onPlanUpdate: async (phases) => { updateLocalState({ buildState: { ...currentProject.buildState!, phases } }); },
+            onPlanUpdate: async (phases) => { 
+                updateLocalState({ buildState: { ...currentProject.buildState!, phases } }); 
+            },
             onMessage: async (msg) => { 
-                const updatedMessages = [...currentProject.messages, msg];
-                updateLocalState({ messages: updatedMessages });
-                try { await this.saveProject(currentProject); } catch(e) {}
+                updateLocalState({ messages: [...currentProject.messages, msg] });
             },
             onBuildMessage: createOrUpdateBuildMessage,
             onPhaseStart: async (idx, p) => {
@@ -258,19 +225,26 @@ export const cloudService = {
             },
             onStepStart: async (idx, s) => {},
             onStepComplete: async (idx, name) => {},
-            onChunkComplete: async (code, exp, meta) => { updateLocalState({ code, status: 'generating', files: meta?.files || currentProject.files }); },
+            onChunkComplete: async (code, exp, meta) => { 
+                updateLocalState({ code, status: 'generating', files: meta?.files || currentProject.files }); 
+            },
             onSuccess: async (code, exp, audit, meta) => { 
                 updateLocalState({ code, status: 'idle', files: meta?.files || currentProject.files }); 
-                try { await this.saveProject(currentProject); } catch(e) {}
+                this.saveProject(currentProject).catch(console.error);
             },
-            onError: async (err, retries) => {},
+            onError: async (err, retries) => {
+                await createOrUpdateBuildMessage(`error_${Date.now()}`, { type: 'build_status', content: `Retry Attempt ${3-retries}: ${err}`, status: 'working' });
+            },
             onFinalError: async (err) => { 
                 updateLocalState({ status: 'failed' }); 
-                try { await this.saveProject(currentProject); } catch(e) {}
+                await createOrUpdateBuildMessage('fatal_error', { type: 'build_error', content: `Fatal Error: ${err}`, status: 'failed', icon: 'alert-triangle' });
+                this.saveProject(currentProject).catch(console.error);
             }
         }, signal, lang as Language);
 
-        supervisor.start(isResume).catch(console.error);
+        supervisor.start(isResume).catch(async (e) => {
+             await createOrUpdateBuildMessage('orchestrator_crash', { type: 'build_error', content: `Orchestrator Crash: ${e.message}`, status: 'failed' });
+        });
     },
 
     async triggerRepair(project: Project, error: string, onUpdate: (p: Project, meta?: any) => void, waitForPreview: any) {
@@ -291,7 +265,7 @@ export const cloudService = {
     
     async uploadChatImage(userId: string, tempId: string, file: File) {
         const path = `${userId}/${tempId}-${file.name}`;
-        const { data } = await supabase.storage.from('chat_images').upload(path, file);
+        await supabase.storage.from('chat_images').upload(path, file);
         return supabase.storage.from('chat_images').getPublicUrl(path).data.publicUrl;
     },
 
