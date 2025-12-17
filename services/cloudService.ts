@@ -1,13 +1,13 @@
-
-// ... (keep all imports same)
+// ... existing imports
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { User, Project, RafieiCloudProject, ProjectFile, Domain, CreditLedgerEntry, FinancialStats, WebhookLog, SystemLog, CreditTransaction, AdminMetric, BuildState, BuildAudit, GeneratedCode, Message, AIDebugLog } from '../types';
+import { User, Project, RafieiCloudProject, ProjectFile, Domain, CreditLedgerEntry, FinancialStats, WebhookLog, SystemLog, CreditTransaction, AdminMetric, BuildState, BuildAudit, GeneratedCode, Message } from '../types';
 import { GenerationSupervisor } from './geminiService';
 import { translations, getCurrentLanguage, Language } from '../utils/translations';
 
 type SupabaseUser = any;
 type Session = any;
 
+// ... (existing helper functions and setup) ...
 // Safe environment access
 const getEnv = (key: string) => {
   try {
@@ -72,14 +72,17 @@ const mapSupabaseUser = (u: SupabaseUser | null): User | null => {
 export const cloudService = {
     abortController: null as AbortController | null,
 
+    // ... (AUTH METHODS same as before) ...
     async getCurrentUser(): Promise<User | null> {
         try {
+            // 1. Quick check for network
             if (typeof navigator !== 'undefined' && !navigator.onLine) {
                 console.warn("Offline detected");
                 return null;
             }
 
             const sessionPromise = (supabase.auth as any).getSession();
+            // Increased timeout to 15s to handle slow connections
             const timeoutPromise = new Promise<{data: {session: null}, error: {message: string}}>((resolve) => 
                 setTimeout(() => resolve({ data: { session: null }, error: { message: 'Timeout' } }), 15000)
             );
@@ -88,11 +91,14 @@ export const cloudService = {
             
             if (error) {
                 console.warn("Supabase session error:", error);
+                // Do NOT disconnect session here. It causes a loop.
+                // Just return null to indicate "could not verify user".
                 return null;
             }
             return mapSupabaseUser(data.session?.user || null);
         } catch (e) {
             console.error("Critical Supabase Client Error in getCurrentUser:", e);
+            // Only clear token if it's strictly a parsing error to recover
             if (e instanceof Error && e.message.includes('JSON')) {
                  try { localStorage.removeItem(`sb-${new URL(SUPABASE_URL).hostname.split('.')[0]}-auth-token`); } catch(err) {}
             }
@@ -105,9 +111,10 @@ export const cloudService = {
             const user = mapSupabaseUser(session?.user || null);
             if (user) {
                 try {
+                    // Non-blocking credit fetch
                     this.getUserCredits(user.id).then(balance => {
                         user.credits_balance = balance;
-                        callback({ ...user }); 
+                        callback({ ...user }); // Trigger update with balance
                     }).catch(() => {});
                 } catch(e) {}
             }
@@ -292,7 +299,8 @@ export const cloudService = {
             status: project.status,
             published_url: project.publishedUrl,
             custom_domain: project.customDomain,
-            rafiei_cloud_project: project.rafieiCloudProject, 
+            // @fix: Changed 'project.rafiei_cloud_project' to 'project.rafieiCloudProject' to match interface
+            rafiei_cloud_project: project.rafieiCloudProject, // Fix snake_case for DB
             vercel_config: project.vercelConfig,
             deleted_at: project.deletedAt ? new Date(project.deletedAt).toISOString() : null
         };
@@ -320,7 +328,9 @@ export const cloudService = {
             
             const { data, error } = await supabase.storage.from('chat_images').upload(filename, blob);
             
-            if (error) throw error;
+            if (error) {
+                throw error;
+            }
             
             const { data: publicData } = supabase.storage.from('chat_images').getPublicUrl(filename);
             return publicData.publicUrl;
@@ -330,12 +340,15 @@ export const cloudService = {
         }
     },
 
+    // Fast creation for immediate feedback
     async createProjectSkeleton(user: User, prompt: string, images: {url: string, base64: string}[]): Promise<string> {
+        // Upload images first to ensure we have valid URLs instead of Blobs
         const processedImages: string[] = [];
         
         for (const img of images) {
             if (img.base64 && !img.base64.startsWith('http')) {
                 try {
+                    console.log("Uploading initial image...");
                     const publicUrl = await this.uploadBase64Image(user.id, img.base64);
                     processedImages.push(publicUrl);
                 } catch (e) {
@@ -357,8 +370,8 @@ export const cloudService = {
             messages: [{
                 id: crypto.randomUUID(),
                 role: 'user',
-                type: 'user_input', 
-                content: prompt, 
+                type: 'user_input', // Set specific type
+                content: prompt, // Content is now optional in Message, but provided here
                 timestamp: Date.now(),
                 images: processedImages
             }],
@@ -407,7 +420,7 @@ export const cloudService = {
     // --- BUILD PROCESS ---
     
     // Internal helper for common Supervisor callbacks
-    createSupervisorCallbacks(currentProject: Project, updateLocalState: any, createOrUpdateBuildMessage: any, signal: AbortSignal, lang: Language, onAIDebugLog?: (log: AIDebugLog, messageId?: string) => void) {
+    createSupervisorCallbacks(currentProject: Project, updateLocalState: any, createOrUpdateBuildMessage: any, signal: AbortSignal, lang: Language) {
         const t = (key: keyof typeof translations['en'], vars?: Record<string, string>) => {
             let str = (translations[lang] || translations['en'])[key] || key;
             if (vars) {
@@ -441,7 +454,9 @@ export const cloudService = {
             onMessage: async (msg: any) => {
                 if (signal.aborted) return;
                 let meta = {};
-                if (msg.requiresAction === 'CONNECT_DATABASE') meta = { requires_database: true };
+                if (msg.requiresAction === 'CONNECT_DATABASE') {
+                    meta = { requires_database: true };
+                }
                 const updatedMessages = [...currentProject.messages, msg];
                 const updated = updateLocalState({ messages: updatedMessages }, meta);
                 try { await this.saveProject(updated); } catch(e) { console.warn("Background save failed (Narrator Message):", e); }
@@ -579,21 +594,6 @@ export const cloudService = {
                 });
                 
                 try { await this.saveProject(updated); } catch(e) { console.warn("Background save failed (Final Error):", e); }
-            },
-            onAIDebugLog: (log: AIDebugLog, messageId?: string) => {
-                if (onAIDebugLog) onAIDebugLog(log, messageId);
-                
-                // Also update the message directly if messageId is provided
-                if (messageId) {
-                    const msgIndex = currentProject.messages.findIndex(m => m.id === messageId);
-                    if (msgIndex !== -1) {
-                        const updatedMessages = [...currentProject.messages];
-                        const msg = updatedMessages[msgIndex];
-                        const aiInteractions = msg.aiInteractions || [];
-                        updatedMessages[msgIndex] = { ...msg, aiInteractions: [...aiInteractions, log] };
-                        updateLocalState({ messages: updatedMessages });
-                    }
-                }
             }
         };
     },
@@ -603,10 +603,11 @@ export const cloudService = {
         prompt: string, 
         images: { url: string; base64: string }[], 
         onUpdate: (p: Project, meta?: any) => void,
-        isResume: boolean = false,
-        onAIDebugLog?: (log: AIDebugLog, messageId?: string) => void
+        isResume: boolean = false
     ) {
-        if (this.abortController) this.abortController.abort();
+        if (this.abortController) {
+            this.abortController.abort();
+        }
         this.abortController = new AbortController();
         const signal = this.abortController.signal;
 
@@ -619,7 +620,11 @@ export const cloudService = {
         
         const t = (key: keyof typeof translations['en'], vars?: Record<string, string>) => {
             let str = (translations[lang] || translations['en'])[key] || key;
-            if (vars) Object.entries(vars).forEach(([k, v]) => { str = str.replace(`{${k}}`, v ?? ''); });
+            if (vars) {
+                Object.entries(vars).forEach(([k, v]) => {
+                    str = str.replace(`{${k}}`, v ?? '');
+                });
+            }
             return str;
         };
 
@@ -639,6 +644,7 @@ export const cloudService = {
             let msgId = messageMap[logicalKey] || crypto.randomUUID();
 
             if (existingMessageIndex !== -1) {
+                // Update existing message
                 const existingMsg = updatedMessages[existingMessageIndex];
                 updatedMessages[existingMessageIndex] = {
                     ...existingMsg,
@@ -649,6 +655,7 @@ export const cloudService = {
                     type: message.type || existingMsg.type 
                 };
             } else {
+                // Create new message
                 const newMsg: Message = {
                     id: msgId,
                     role: 'assistant',
@@ -662,10 +669,16 @@ export const cloudService = {
             messageMap[logicalKey] = msgId; 
 
             let meta = {};
-            if (message.requiresAction === 'CONNECT_DATABASE') meta = { requires_database: true };
+            if (message.requiresAction === 'CONNECT_DATABASE') {
+                meta = { requires_database: true };
+            }
 
             const updated = updateLocalState({ messages: updatedMessages }, meta);
-            try { await this.saveProject(updated); } catch(e) { console.warn("Background save failed (Build Message):", e); }
+            try { 
+                await this.saveProject(updated); 
+            } catch(e) { 
+                console.warn("Background save failed (Build Message):", e); 
+            }
             return updatedMessages.find(m => m.id === msgId)!; 
         };
 
@@ -678,7 +691,7 @@ export const cloudService = {
 
         await this.saveProject(currentProject);
 
-        const callbacks = this.createSupervisorCallbacks(currentProject, updateLocalState, createOrUpdateBuildMessage, signal, lang, onAIDebugLog);
+        const callbacks = this.createSupervisorCallbacks(currentProject, updateLocalState, createOrUpdateBuildMessage, signal, lang);
 
         const supervisor = new GenerationSupervisor(
             currentProject,
@@ -696,16 +709,17 @@ export const cloudService = {
         project: Project, 
         error: string,
         onUpdate: (p: Project, meta?: any) => void,
-        waitForPreview: (ms: number) => Promise<{success: boolean, error?: string}>,
-        onAIDebugLog?: (log: AIDebugLog, messageId?: string) => void
+        waitForPreview: (ms: number) => Promise<{success: boolean, error?: string}>
     ) {
-        if (this.abortController) this.abortController.abort();
+        if (this.abortController) {
+            this.abortController.abort();
+        }
         this.abortController = new AbortController();
         const signal = this.abortController.signal;
 
         let currentProject = { ...project };
         const userLang = getCurrentLanguage();
-        const lang: Language = userLang;
+        const lang: Language = userLang; // Force system language for repairs usually, or auto-detect from project messages if needed
 
         const messageMap: Record<string, string> = {};
 
@@ -746,16 +760,22 @@ export const cloudService = {
             messageMap[logicalKey] = msgId; 
 
             const updated = updateLocalState({ messages: updatedMessages });
-            try { await this.saveProject(updated); } catch(e) { console.warn("Background save failed (Repair Message):", e); }
+            try { 
+                await this.saveProject(updated); 
+            } catch(e) { 
+                console.warn("Background save failed (Repair Message):", e); 
+            }
             return updatedMessages.find(m => m.id === msgId)!; 
         };
 
-        const callbacks = this.createSupervisorCallbacks(currentProject, updateLocalState, createOrUpdateBuildMessage, signal, lang, onAIDebugLog);
+        const callbacks = this.createSupervisorCallbacks(currentProject, updateLocalState, createOrUpdateBuildMessage, signal, lang);
+        
+        // Enhance callbacks with the wait function
         callbacks.waitForPreview = waitForPreview;
 
         const supervisor = new GenerationSupervisor(
             currentProject,
-            "", 
+            "", // No prompt needed for repair, error is context
             [],
             callbacks,
             signal,
@@ -787,6 +807,9 @@ export const cloudService = {
         return publicData.publicUrl;
     },
 
+    // ... (rest of methods)
+    
+    // --- DOMAINS ---
     async getDomainsForProject(projectId: string): Promise<Domain[]> {
         const { data, error } = await supabase.from('project_domains').select('*').eq('project_id', projectId);
         if (error) throw error;
@@ -804,6 +827,7 @@ export const cloudService = {
 
     async addDomain(projectId: string, userId: string, domain: string): Promise<void> {
         if (!domain.includes('.')) throw new Error("Invalid domain format");
+        
         const type = domain.split('.').length > 2 ? 'subdomain' : 'root';
         const recordType = type === 'root' ? 'A' : 'CNAME';
         const recordValue = type === 'root' ? '76.76.21.21' : 'cname.vercel-dns.com';
@@ -827,7 +851,10 @@ export const cloudService = {
         const status = Math.random() > 0.3 ? 'verified' : 'error';
         const { data, error } = await supabase.from('project_domains').update({ status }).eq('id', domainId).select().single();
         if (error) throw error;
-        if (status === 'verified') await supabase.from('projects').update({ custom_domain: data.domain }).eq('id', data.project_id);
+        
+        if (status === 'verified') {
+            await supabase.from('projects').update({ custom_domain: data.domain }).eq('id', data.project_id);
+        }
 
         return {
             id: data.id,
@@ -841,6 +868,7 @@ export const cloudService = {
         };
     },
 
+    // --- RAFIEI CLOUD ---
     async saveRafieiCloudProject(project: RafieiCloudProject) {
         const payload = {
             id: project.id,
@@ -857,6 +885,7 @@ export const cloudService = {
         if (error) throw error;
     },
 
+    // --- ADMIN & SYSTEM (Paginated) ---
     async getProjectLogs(projectId: string, limit: number = 100): Promise<SystemLog[]> {
         const { data, error } = await supabase
             .from('system_logs')
@@ -864,7 +893,9 @@ export const cloudService = {
             .eq('project_id', projectId)
             .order('created_at', { ascending: false })
             .limit(limit);
+            
         if (error) return [];
+        
         return (data || []).map((l: any) => ({
             id: l.id,
             timestamp: new Date(l.created_at).getTime(),
@@ -878,7 +909,9 @@ export const cloudService = {
 
     async checkTableExists(tableName: string): Promise<boolean> {
         const { error } = await supabase.from(tableName).select('id').limit(1);
-        if (error && error.code === '42P01') return false; 
+        if (error) {
+            if (error.code === '42P01') return false; 
+        }
         return true;
     },
 
@@ -896,22 +929,35 @@ export const cloudService = {
             .select('*', { count: 'exact' })
             .order('created_at', { ascending: false })
             .range(from, to);
+            
         if (error) throw error;
-        return { data: (data || []).map(this.mapProject), count: count || 0 };
+        return { 
+            data: (data || []).map(this.mapProject), 
+            count: count || 0 
+        };
     },
 
     async getAdminUsers(page = 1, limit = 10): Promise<{ data: any[], count: number }> {
         const from = (page - 1) * limit;
         const to = from + limit - 1;
+        
+        // Use RPC with range for pagination if supported, otherwise fallback to simple fetch logic
+        // Assuming 'get_all_users' returns a setof record/table which allows chaining range
         const { data, count, error } = await supabase
             .rpc('get_all_users', {}, { count: 'exact' })
             .range(from, to);
+            
         if (error) throw error;
         return { data: data || [], count: count || 0 };
     },
 
+    // New method for searching users by email (admin only)
     async searchUsers(query: string): Promise<any[]> {
-        const { data, error } = await supabase.rpc('get_all_users').ilike('email', `%${query}%`).limit(5);
+        const { data, error } = await supabase
+            .rpc('get_all_users')
+            .ilike('email', `%${query}%`)
+            .limit(5);
+            
         if (error) throw error;
         return data || [];
     },
@@ -924,6 +970,7 @@ export const cloudService = {
             .select('*', { count: 'exact' })
             .order('created_at', { ascending: false })
             .range(from, to);
+            
         if (error) return { data: [], count: 0 };
         const logs = (data || []).map((l: any) => ({
             id: l.id,
@@ -938,8 +985,11 @@ export const cloudService = {
     },
 
     async getFinancialStats(): Promise<FinancialStats | null> {
+        // This still requires aggregate data, so we don't paginate here.
+        // It's a summary endpoint.
         const { data: ledger } = await supabase.from('credit_ledger').select('credits_deducted, raw_cost_usd, input_tokens, output_tokens');
         const { data: transactions } = await supabase.from('credit_transactions').select('amount').eq('type', 'purchase');
+        
         if (!ledger || !transactions) return null;
 
         const totalRevenueCredits = ledger.reduce((sum, row) => sum + (Number(row.credits_deducted) || 0), 0);
@@ -970,6 +1020,7 @@ export const cloudService = {
             .select('*', { count: 'exact' })
             .order('created_at', { ascending: false })
             .range(from, to);
+            
         if (error) return { data: [], count: 0 };
         const ledger = (data || []).map((row: any) => ({
             id: row.id,
@@ -993,6 +1044,7 @@ export const cloudService = {
         return data?.value || null;
     },
 
+    // New helper to fetch multiple settings efficiently
     async getSystemSettings(keys: string[]) {
         const { data, error } = await supabase.from('system_settings').select('key, value').in('key', keys);
         if (error) throw error;
@@ -1012,6 +1064,7 @@ export const cloudService = {
             .select('*', { count: 'exact' })
             .order('created_at', { ascending: false })
             .range(from, to);
+            
         if (error) return { data: [], count: 0 };
         return { data: data as WebhookLog[], count: count || 0 };
     },
@@ -1024,11 +1077,13 @@ export const cloudService = {
     async getUserFinancialOverview(userId: string) {
         const { data: txs } = await supabase.from('credit_transactions').select('amount').eq('user_id', userId).eq('type', 'purchase');
         const { data: usage } = await supabase.from('credit_ledger').select('credits_deducted, raw_cost_usd').eq('user_id', userId);
+        
         const totalPurchased = txs?.reduce((sum, t) => sum + Number(t.amount), 0) || 0;
         const totalSpent = usage?.reduce((sum, u) => sum + Number(u.credits_deducted), 0) || 0;
         const totalCost = usage?.reduce((sum, u) => sum + Number(u.raw_cost_usd), 0) || 0;
         const revenueUsd = totalSpent / 10;
         const profitGenerated = revenueUsd - totalCost;
+
         return { totalPurchased, totalSpent, totalCost, profitGenerated };
     },
 
@@ -1048,13 +1103,18 @@ export const cloudService = {
         }));
     },
 
+    // Fixed: Removed 'adminEmail' param to match updated SQL
     async adminAdjustCredit(userId: string, amount: number, note: string): Promise<void> {
         const { error } = await supabase.rpc('admin_adjust_balance', {
             p_target_user_id: userId,
             p_amount: amount,
             p_description: note
         });
-        if (error) throw error;
+        
+        if (error) {
+            console.error("RPC admin_adjust_balance failed:", error);
+            throw error;
+        }
     },
 
     mapProject(p: any): Project {
@@ -1072,9 +1132,11 @@ export const cloudService = {
             buildState: p.build_state || null,
             publishedUrl: p.published_url,
             customDomain: p.custom_domain,
+            // @fix: Changed 'rafiei_cloud_project' to 'rafieiCloudProject' to match interface
             rafieiCloudProject: p.rafiei_cloud_project ? {
                 id: p.rafiei_cloud_project.id,
                 userId: p.rafiei_cloud_project.user_id || p.rafiei_cloud_project.userId,
+                // Handle both snake_case (DB row) and camelCase (JSONB object) keys
                 projectRef: p.rafiei_cloud_project.project_ref || p.rafiei_cloud_project.projectRef,
                 projectName: p.rafiei_cloud_project.project_name || p.rafiei_cloud_project.projectName,
                 status: p.rafiei_cloud_project.status,

@@ -1,7 +1,6 @@
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Project, Message, ViewMode, User, Suggestion, BuildState, VercelConfig, AIDebugLog } from '../types';
+import { Project, Message, ViewMode, User, Suggestion, BuildState, VercelConfig } from '../types';
 import { generateProjectTitle, generateSuggestions, handleUserIntent } from '../services/geminiService';
 import { cloudService } from '../services/cloudService';
 import { rafieiCloudService } from '../services/rafieiCloudService';
@@ -13,11 +12,11 @@ import ChatInterface from './ChatInterface';
 import CodeEditor from './CodeEditor';
 import PublishDropdown from './PublishDropdown';
 import ManageDomainsModal from './ManageDomainsModal';
-import ProjectLogModal, { LogEntry, LogTab } from './ProjectLogModal';
+import ProjectLogModal, { LogEntry } from './ProjectLogModal';
 import { 
     Loader2, ArrowLeft, PanelLeft, Monitor, Tablet, Smartphone, 
     Check, Cloud, MessageSquare, Eye, Globe, X, LayoutDashboard, 
-    ExternalLink, Power, FileText, Rocket, AlertTriangle, Bug
+    ExternalLink, Power, FileText, Rocket, AlertTriangle
 } from 'lucide-react';
 
 interface ProjectBuilderProps {
@@ -27,7 +26,6 @@ interface ProjectBuilderProps {
 type DeviceMode = 'desktop' | 'tablet' | 'mobile';
 
 const MAX_AUTO_REPAIRS = 3;
-const ADMIN_DEBUG_EMAIL = 'rezarafeie13@gmail.com';
 
 const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -41,10 +39,6 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   const [isSuggestionsLoading, setIsSuggestionsLoading] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   
-  // Realtime AI Debug Logs
-  const [aiDebugLogs, setAiDebugLogs] = useState<AIDebugLog[]>([]);
-  const [hasNewDebugLog, setHasNewDebugLog] = useState(false);
-  
   // Persisted Pending Prompt for Build Resumption
   const [pendingPrompt, setPendingPrompt] = useState<{ content: string; images: { url: string; base64: string }[] } | null>(() => {
       if (projectId) {
@@ -57,10 +51,10 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   });
   
   // Deployment States
-  const [isAutoDeploying, setIsAutoDeploying] = useState(false); 
-  const [isManualDeploying, setIsManualDeploying] = useState(false); 
+  const [isAutoDeploying, setIsAutoDeploying] = useState(false); // For auto-deploy after AI build (Disabled now, kept for manual hooks if needed)
+  const [isManualDeploying, setIsManualDeploying] = useState(false); // For user-triggered publish
   const [manualDeployError, setManualDeployError] = useState<string | null>(null);
-  const [fallbackToLocalPreview, setFallbackToLocalPreview] = useState(false); 
+  const [fallbackToLocalPreview, setFallbackToLocalPreview] = useState(false); // New state to force local preview on deploy failure
 
   const projectRef = useRef<Project | null>(null);
   const lastSuggestionMessageIdRef = useRef<string | null>(null);
@@ -71,15 +65,16 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   const isAutoFixingRef = useRef(false);
   const isUserStoppedRef = useRef(false);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const autoStartRef = useRef(false); 
+  const autoStartRef = useRef(false); // To prevent double triggers
   
   const [viewMode, setViewMode] = useState<ViewMode>('preview');
   const [mobileTab, setMobileTab] = useState<'chat' | 'preview'>('chat');
   const [deviceMode, setDeviceMode] = useState<DeviceMode>('desktop');
   
+  // State for sidebar resizing
   const [isResizing, setIsResizing] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(400); 
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true); 
+  const [sidebarWidth, setSidebarWidth] = useState(400); // Initial sidebar width
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true); // Sidebar open/close state
   
   const [showPublishDropdown, setShowPublishDropdown] = useState(false);
   const [showManageDomains, setShowManageDomains] = useState(false);
@@ -89,12 +84,11 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
   // Log State
   const [isLogModalOpen, setIsLogModalOpen] = useState(false);
-  const [activeLogTab, setActiveLogTab] = useState<LogTab>('builder');
-  const [previewLogs, setPreviewLogs] = useState<LogEntry[]>([]);
+  const [previewLogs, setPreviewLogs] = useState<LogEntry[]>([]);// Clear the preview logs
   const [cloudLogs, setCloudLogs] = useState<LogEntry[]>([]);
   const [vercelLogs, setVercelLogs] = useState<LogEntry[]>([]);
-  const [filteredAIDebugLogs, setFilteredAIDebugLogs] = useState<LogEntry[] | null>(null);
 
+  // Refs for Repair Loop Bridge
   const repairResolverRef = useRef<((result: {success: boolean, error?: string}) => void) | null>(null);
 
   const desktopPublishRef = useRef<HTMLDivElement>(null);
@@ -104,8 +98,8 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   const { theme, toggleTheme } = useTheme();
   
   const isMobile = typeof window !== 'undefined' ? window.innerWidth < 768 : false;
-  const isAdmin = user.email === ADMIN_DEBUG_EMAIL;
   
+  // @fix: Changed 'project.rafiei_cloud_project' to 'project.rafieiCloudProject' to match interface
   const cloudStatus = project?.rafieiCloudProject?.status || 'idle';
   const isCloudActive = cloudStatus === 'ACTIVE';
   const isConnectingCloud = cloudStatus === 'CREATING';
@@ -124,29 +118,44 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   const isFirstGeneration = isBuilding && project ? (!project.code.html && !project.code.javascript) : false;
   const isUpdating = isBuilding && !isFirstGeneration;
 
+  // Unified Deployment state for overlay
   const isDeployingAnywhere = isAutoDeploying || isManualDeploying;
 
+  // Resumable state detection
   const isResumable = project && (project.status === 'idle' || project.status === 'failed') && 
                      project.buildState && project.buildState.phases && 
                      project.buildState.phases.some(p => p.status !== 'completed');
 
+  // FORCE LOCAL PREVIEW: We always return undefined for externalUrl to ensure the iframe uses srcDoc (generated code).
+  // The Vercel URL is still accessible via the Publish Dropdown.
   const previewUrl = undefined; 
 
+  // Safe wrapper for runtime errors to prevent flashing on initial load
   const handleRuntimeError = (error: string) => {
+      // Check if we are in an active repair loop
       if (repairResolverRef.current) {
+          // If error occurs during repair validation wait, reject the promise with the error
           repairResolverRef.current({ success: false, error });
-          repairResolverRef.current = null; 
+          repairResolverRef.current = null; // Clear resolver
           return;
       }
+
+      // If the project code is effectively empty (fresh skeleton), suppress errors
+      // as they are likely due to the empty state being rendered by the iframe.
       if (project && (!project.code.html && !project.files?.length)) return;
       if (isFirstGeneration) return;
+      
       setRuntimeError(error);
   };
 
+  // Persist pendingPrompt to localStorage
   useEffect(() => {
       if (projectId) {
-          if (pendingPrompt) localStorage.setItem(`pending_prompt_${projectId}`, JSON.stringify(pendingPrompt));
-          else localStorage.removeItem(`pending_prompt_${projectId}`);
+          if (pendingPrompt) {
+              localStorage.setItem(`pending_prompt_${projectId}`, JSON.stringify(pendingPrompt));
+          } else {
+              localStorage.removeItem(`pending_prompt_${projectId}`);
+          }
       }
   }, [pendingPrompt, projectId]);
 
@@ -156,7 +165,9 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   const resize = useCallback((mouseMoveEvent: MouseEvent) => {
       if (isResizing) {
           const newWidth = mouseMoveEvent.clientX;
-          if (newWidth > 300 && newWidth < 800) setSidebarWidth(newWidth);
+          if (newWidth > 300 && newWidth < 800) {
+              setSidebarWidth(newWidth);
+          }
       }
   }, [isResizing]);
 
@@ -175,9 +186,12 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       return () => {
           window.removeEventListener("mousemove", resize);
           window.removeEventListener("mouseup", stopResizing);
+          document.body.style.userSelect = '';
+          document.body.style.cursor = '';
       };
   }, [isResizing, resize, stopResizing]);
 
+  // Log Message Listener
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
         if (event.data?.type === 'PREVIEW_LOG' && event.data.payload) {
@@ -188,7 +202,12 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
+  // SAFETY WATCHDOG
   useEffect(() => {
+      // This watchdog prevents the build from getting stuck in the INITIAL analysis phase.
+      // If the build has already progressed past phase 0 (Analysis), we disable this check
+      // to prevent false positives during complex, long-running build steps.
+      
       const isPastAnalysis = buildState && (
           (buildState.phases && buildState.phases.length > 0) || 
           (buildState.currentPhaseIndex !== undefined && buildState.currentPhaseIndex > 0) || 
@@ -198,6 +217,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       if (isBuilding && buildState && !isPastAnalysis) {
           if (watchdogRef.current) clearTimeout(watchdogRef.current);
           watchdogRef.current = setTimeout(() => {
+              console.warn("Watchdog triggered: Stuck in initial analysis phase. Forcing restart...");
               if (project) {
                   const errorMsg: Message = {
                       id: crypto.randomUUID(),
@@ -210,12 +230,16 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                   };
                   const updated = { ...project, messages: [...project.messages, errorMsg] };
                   setProject(updated);
+                  
                   const lastUserMsg = [...project.messages].reverse().find(m => m.role === 'user');
-                  if (lastUserMsg) handleSendMessage(lastUserMsg.content || '', [], updated, true);
+                  if (lastUserMsg) {
+                      handleSendMessage(lastUserMsg.content || '', [], updated, true);
+                  }
               }
-          }, 1200000); 
-      } else if (watchdogRef.current) {
-          clearTimeout(watchdogRef.current);
+          }, 1200000); // 20-minute timeout for INITIAL analysis only
+      } else {
+          // If we have passed analysis or aren't building, clear any pending timeout.
+          if (watchdogRef.current) clearTimeout(watchdogRef.current);
       }
       return () => { if (watchdogRef.current) clearTimeout(watchdogRef.current); };
   }, [isBuilding, buildState?.phases?.length, buildState?.currentPhaseIndex, buildState?.currentStep]);
@@ -223,21 +247,26 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
   useEffect(() => {
       projectRef.current = project;
+      
+      // Auto-start build for fresh skeleton projects
       if (project && project.status === 'idle' && project.messages.length === 1 && project.messages[0].role === 'user' && !project.code.javascript && !autoStartRef.current) {
           autoStartRef.current = true;
           const prompt = project.messages[0].content || '';
           const images = project.messages[0].images?.map(url => ({ url, base64: '' })) || [];
+          console.log("Auto-triggering initial build for new project...");
           handleSendMessage(prompt, images, project, true); 
       }
 
+      // Check if project became active and we have a pending prompt to execute
+      // @fix: Changed 'project.rafiei_cloud_project' to 'project.rafieiCloudProject' to match interface
       if (project?.rafieiCloudProject?.status === 'ACTIVE' && pendingPrompt) {
           const promptToExecute = { ...pendingPrompt };
-          setPendingPrompt(null); 
+          setPendingPrompt(null); // Clear pending
 
           const successMsg: Message = {
             id: crypto.randomUUID(),
             role: 'assistant',
-            type: 'build_status', 
+            type: 'build_status', // Use new type
             content: t('cloudConnectedAndResuming'),
             status: 'completed',
             icon: 'check',
@@ -252,6 +281,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
               handleSendMessage(promptToExecute.content, promptToExecute.images, updated, true);
           }, 1000);
       }
+
   }, [project, pendingPrompt]); 
 
   const fetchProject = async () => {
@@ -261,6 +291,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
           if (p) {
               setProject(p);
               setBuildState(p.buildState || null);
+              // @fix: Changed 'p.rafiei_cloud_project' to 'p.rafieiCloudProject' to match interface
               if (p.rafieiCloudProject && p.rafieiCloudProject.status === 'CREATING') {
                   rafieiCloudService.monitorProvisioning(p.rafieiCloudProject, p.id);
               }
@@ -268,6 +299,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
               navigate('/dashboard');
           }
       } catch (err) {
+          console.error("Failed to load project:", err);
           navigate('/dashboard');
       } finally {
           setLoading(false);
@@ -284,7 +316,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
     isAutoFixingRef.current = false;
     isUserStoppedRef.current = false;
     autoStartRef.current = false;
-    setFallbackToLocalPreview(false); 
+    setFallbackToLocalPreview(false); // Reset on project load
   }, [projectId]);
 
   useEffect(() => {
@@ -293,11 +325,12 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       setProject(updatedProject);
       setBuildState(updatedProject.buildState || null);
     });
-    return () => { unsubscribe(); }; 
+    return () => { unsubscribe(); }; // Explicit void return to fix TS error
   }, [projectId]);
 
   const handleStop = async () => {
     isUserStoppedRef.current = true;
+    // @fix: Changed 'project.rafiei_cloud_project' to 'project.rafieiCloudProject' to match interface
     if (isConnectingCloud && project?.rafieiCloudProject) {
         rafieiCloudService.cancelMonitoring(project.rafieiCloudProject.id);
         setPendingPrompt(null);
@@ -305,12 +338,13 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
         const cancelMsg: Message = { 
             id: crypto.randomUUID(), 
             role: 'assistant', 
-            type: 'build_status',
+            type: 'build_status', // Use new type
             content: t('cloudConnectionCancelled'), 
             status: 'failed',
             icon: 'x',
             timestamp: Date.now() 
         };
+        // @fix: Changed 'rafiei_cloud_project: undefined' to 'rafieiCloudProject: undefined' to match interface
         const updated = { ...project, rafieiCloudProject: undefined, messages: [...project.messages, cancelMsg], updatedAt: Date.now() };
         setProject(updated);
         setBuildState(null);
@@ -335,9 +369,11 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
   const handleContinue = () => {
       if (!project) return;
+      // Get original prompt
       const lastUserMsg = [...project.messages].reverse().find(m => m.role === 'user');
       const prompt = lastUserMsg?.content || "";
       const images = lastUserMsg?.images?.map(url => ({ url, base64: '' })) || [];
+      
       handleSendMessage(prompt, images, project, false, false, false, true);
   };
   
@@ -345,6 +381,8 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       if (project) {
           isAutoFixingRef.current = true;
           setRuntimeError(null);
+
+          // Clear any previous resolver to avoid leaks
           if (repairResolverRef.current) {
               repairResolverRef.current({ success: false, error: "Restarted repair" });
               repairResolverRef.current = null;
@@ -360,9 +398,12 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
           const waitForPreview = (timeoutMs: number) => {
               return new Promise<{success: boolean, error?: string}>((resolve) => {
+                  // Set the resolver that handleRuntimeError will call if an error occurs
                   repairResolverRef.current = resolve;
+                  
+                  // Set a timeout to assume success if no error occurs
                   setTimeout(() => {
-                      if (repairResolverRef.current === resolve) { 
+                      if (repairResolverRef.current === resolve) { // Check if still the active resolver
                           resolve({ success: true });
                           repairResolverRef.current = null;
                       }
@@ -374,9 +415,9 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
               project, 
               runtimeError || "Unknown runtime error", 
               onUpdateCallback,
-              waitForPreview,
-              handleAIDebugLog
+              waitForPreview
           ).catch(e => {
+              console.error("Repair loop failed:", e);
               isAutoFixingRef.current = false;
           });
       }
@@ -412,7 +453,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
         const failMsg: Message = { 
             id: crypto.randomUUID(), 
             role: 'assistant', 
-            type: 'build_error', 
+            type: 'build_error', // Use new type
             content: t('cloudConnectionFailedError', {errorMessage: error.message}), 
             status: 'failed',
             icon: 'x',
@@ -426,70 +467,87 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
   const handleSkipBackend = async () => {
       if (!project) return;
+      
       let previousIntent = "";
       let previousImages: { url: string; base64: string }[] = [];
+
+      // 1. Try to recover intent from pending prompt if available
       if (pendingPrompt) {
           previousIntent = pendingPrompt.content;
           previousImages = pendingPrompt.images || [];
       } else {
+          // 2. Fallback: find the last user message to provide context
           const lastUserMsg = [...project.messages].reverse().find(m => m.role === 'user');
           if (lastUserMsg) {
               previousIntent = lastUserMsg.content || "";
+              // Recover images attached to the last prompt so the AI can still see them
               if (lastUserMsg.images && lastUserMsg.images.length > 0) {
+                  // Map URL back to object. Base64 is likely lost from memory but URL persists in DB.
+                  // The service layer (geminiService) handles fetching from URL if base64 is missing.
                   previousImages = lastUserMsg.images.map(url => ({ url, base64: '' }));
               }
           }
       }
+
+      // Explicitly reference the previous intent so the AI knows what to build
       const skipMessage = `I want to continue with my previous request: "${previousIntent}". \n\nHowever, please skip the backend connection for now. Proceed with a frontend-only implementation using mock data.`;
+      
+      // Clear pending state
       setPendingPrompt(null);
+      
+      // Send message invisibly (isHidden=true) so it doesn't clutter the UI with the system prompt, 
+      // but still triggers the build process with the full context (text + images).
       await handleSendMessage(skipMessage, previousImages, project, false, false, true);
   };
 
+  // --- MANUAL DEPLOYMENT HANDLERS (for PublishDropdown) ---
   const handleManualDeployStart = () => {
       setIsManualDeploying(true);
       setManualDeployError(null);
-      setFallbackToLocalPreview(false); 
+      setFallbackToLocalPreview(false); // Reset fallback on new attempt
   };
 
   const handleManualDeployComplete = useCallback(async (vercelConfig: VercelConfig | null, error: string | null) => {
       if (error) {
           setManualDeployError(error);
           setIsManualDeploying(false);
-          setFallbackToLocalPreview(true); 
+          setFallbackToLocalPreview(true); // Force local preview if deploy failed (e.g. rate limit)
       } else if (vercelConfig) {
+          // Wait 2 seconds before showing the live URL to allow overlay to show completion state
           await new Promise(resolve => setTimeout(resolve, 2000));
+
+          // Update project state with new vercel config locally (realtime subscription will also update)
           setProject(prev => {
-              if (prev) return { ...prev, vercelConfig, publishedUrl: vercelConfig.productionUrl };
+              if (prev) {
+                  return { ...prev, vercelConfig, publishedUrl: vercelConfig.productionUrl };
+              }
               return prev;
           });
+
           setIsManualDeploying(false);
-          setShowPublishDropdown(false); 
+          setShowPublishDropdown(false); // Close dropdown
       }
   }, []);
 
-  const handleAIDebugLog = useCallback((log: AIDebugLog, messageId?: string) => {
-      setAiDebugLogs(prev => [...prev.slice(-49), log]);
-      setHasNewDebugLog(true);
-      setTimeout(() => setHasNewDebugLog(false), 2000);
-  }, []);
-
+  // --- MAIN SEND MESSAGE ---
   const handleSendMessage = async (
       content: string, 
       images: { url: string; base64: string }[], 
       projectOverride?: Project, 
       isInitialAutoStart = false, 
       isAutoFix = false,
-      isHidden = false, 
+      isHidden = false, // New parameter to send prompts without showing in UI
       isResume = false
   ) => {
     const currentProject = projectOverride || projectRef.current;
+    
     if (!currentProject || !user || (currentProject.status === 'generating' && !projectOverride && !isInitialAutoStart)) return;
 
     setSuggestions([]);
     handleClearCloudConnectionState();
     setRuntimeError(null);
     isUserStoppedRef.current = false;
-    setFallbackToLocalPreview(false); 
+    setFallbackToLocalPreview(false); // Reset fallback when starting new build
 
     if (!isAutoFix && !isInitialAutoStart && !isResume) {
         autoRepairAttemptsRef.current = 0;
@@ -497,6 +555,8 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
     }
 
     let updatedProject = currentProject;
+
+    // Only add user message to UI if NOT hidden and NOT initial auto-start and NOT resume
     if (!isInitialAutoStart && !isHidden && !isResume) {
         const userMsg: Message = {
             id: crypto.randomUUID(),
@@ -514,6 +574,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
         setProject(updatedProject);
     }
 
+    // Prepare logs - if resuming, keep existing logs if we want, or just add a 'Resuming' marker
     const initialLogs = isResume 
         ? [...(buildState?.logs || []), "Resuming build process..."]
         : [t('initBuild'), t('analyzingReq'), t('preparingEnv')];
@@ -530,35 +591,50 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
     try {
         let projectToBuild = { ...updatedProject };
+        
         if (!isResume && projectToBuild.messages.filter(m => m.role === 'user').length === 1) {
             const title = await generateProjectTitle(content, user, projectToBuild);
             projectToBuild.name = title;
         }
+
         projectToBuild.status = 'generating';
         projectToBuild.updatedAt = Date.now(); 
+        
         projectToBuild.buildState = {
             ...(buildState || { plan: [], phases: [], currentPhaseIndex: 0, currentStep: 0, lastCompletedStep: -1, error: null }),
             logs: [...initialLogs]
         };
+
         setProject(projectToBuild); 
 
         const onUpdateCallback = (updatedState: Project, meta?: any) => {
+            // This is the new handleLocalStateUpdate
             setProject(prev => {
                 if (!prev || prev.id !== updatedState.id) return prev;
                 return updatedState;
             });
             setBuildState(updatedState.buildState || null);
-            if (updatedState.status === 'idle' && updatedState.buildState?.audit?.passed) setRuntimeError(null);
-            if (meta?.requires_database && !pendingPrompt) setPendingPrompt({ content, images });
+
+            // FIX: Clear runtime errors if the build finished successfully with a passing audit
+            if (updatedState.status === 'idle' && updatedState.buildState?.audit?.passed) {
+                setRuntimeError(null);
+            }
+
+            if (meta?.requires_database && !pendingPrompt) {
+                console.log("Database connection required, saving pending prompt.");
+                setPendingPrompt({ content, images });
+            }
         };
 
-        cloudService.triggerBuild(projectToBuild, content, images, onUpdateCallback, isResume, handleAIDebugLog);
+        cloudService.triggerBuild(projectToBuild, content, images, onUpdateCallback, isResume);
+
     } catch (e: any) {
+        console.error("Handle Message Error", e);
         setBuildState(prev => prev ? ({...prev, error: `Error: ${e.message}`}) : null);
         const errorMsg: Message = { 
             id: crypto.randomUUID(), 
             role: 'assistant', 
-            type: 'build_error', 
+            type: 'build_error', // Use new type
             content: `Error: ${e.message}`, 
             status: 'failed',
             icon: 'x',
@@ -570,11 +646,11 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
     }
   };
   
-  const handleOpenLogs = async (tab: LogTab = 'builder') => {
+  // Log Handlers
+  const handleOpenLogs = async () => {
       if (!project) return;
-      setActiveLogTab(tab);
-      setFilteredAIDebugLogs(null);
       setIsLogModalOpen(true);
+      // Fetch fresh logs on open
       try {
           const logs = await cloudService.getProjectLogs(project.id);
           setCloudLogs(logs.map(l => ({
@@ -584,6 +660,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
           })));
       } catch (e) {}
 
+      // Synthesize Vercel logs
       if (project.vercelConfig) {
           setVercelLogs([
               { timestamp: new Date(project.vercelConfig.lastDeployedAt).toISOString(), level: 'info', message: `Deployment ${project.vercelConfig.latestDeploymentId} created.` },
@@ -595,19 +672,9 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       }
   };
 
-  const handleViewTrace = useCallback((interactions: AIDebugLog[]) => {
-      const logs: LogEntry[] = interactions.map(log => ({
-          timestamp: new Date(log.timestamp).toISOString(),
-          level: 'debug',
-          message: `[${log.stepKey}] Model: ${log.model}\n\nSYSTEM INSTRUCTION:\n${log.systemInstruction}\n\nPROMPT:\n${log.prompt}\n\nRESPONSE:\n${log.response}`,
-      }));
-      setFilteredAIDebugLogs(logs);
-      setActiveLogTab('aidebug');
-      setIsLogModalOpen(true);
-  }, []);
-
   const handleClearLogs = (logType: 'preview' | 'all') => {
       if (logType === 'preview') setPreviewLogs([]);
+      // could add 'all' case if needed
   };
 
   const builderLogs = project?.buildState?.logs?.map(log => ({
@@ -616,16 +683,12 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       message: log
   })) || [];
 
-  const aiLogsForModal: LogEntry[] = aiDebugLogs.map(log => ({
-      timestamp: new Date(log.timestamp).toISOString(),
-      level: 'debug',
-      message: `[${log.stepKey}] Model: ${log.model}\n\nSYSTEM INSTRUCTION:\n${log.systemInstruction}\n\nPROMPT:\n${log.prompt}\n\nRESPONSE:\n${log.response}`,
-  }));
 
-  if (loading) return <div className="h-screen flex items-center justify-center bg-slate-50 dark:bg-[#0f172a] text-slate-800 dark:white"><Loader2 className="animate-spin" size={32} /></div>;
+  if (loading) return <div className="h-screen flex items-center justify-center bg-slate-50 dark:bg-[#0f172a] text-slate-800 dark:text-white"><Loader2 className="animate-spin" size={32} /></div>;
   if (!project) return null;
 
   const deviceSizeClass = deviceMode === 'desktop' ? 'w-full h-full' : deviceMode === 'tablet' ? 'w-[768px] h-full max-w-full mx-auto' : 'w-[375px] h-[667px] max-w-full mx-auto';
+  // @fix: Changed 'project.rafiei_cloud_project' to 'project.rafieiCloudProject' to match interface
   const hasCloudProject = project.rafieiCloudProject != null && project.rafieiCloudProject.status === 'ACTIVE';
   
   return (
@@ -637,9 +700,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
             previewLogs={previewLogs}
             cloudLogs={cloudLogs}
             vercelLogs={vercelLogs}
-            aiDebugLogs={filteredAIDebugLogs || (isAdmin ? aiLogsForModal : [])}
             onClear={handleClearLogs}
-            defaultTab={activeLogTab}
         />
         
         {/* Header */}
@@ -660,16 +721,8 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                 </div>
             </div>
             <div className="flex items-center gap-3">
-                {isAdmin && (
-                    <button 
-                        onClick={() => handleOpenLogs('aidebug')}
-                        className={`flex items-center gap-1.5 px-2 py-1 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-500/20 text-amber-600 dark:text-amber-400 rounded text-[10px] font-bold uppercase tracking-wider transition-all hover:scale-105 active:scale-95 ${hasNewDebugLog ? 'animate-pulse ring-2 ring-amber-500/50' : ''}`}
-                    >
-                        <Bug size={10} /> Debug Mode
-                    </button>
-                )}
                 {hasCloudProject && <button onClick={() => navigate(`/cloud/${project.id}`)} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 rounded-full text-xs font-medium hover:bg-emerald-100 dark:hover:bg-emerald-900/20 transition-colors"><Cloud size={12} fill="currentColor" /><span className="hidden lg:inline">Cloud Active</span></button>}
-                <button onClick={() => handleOpenLogs('builder')} className="p-2 text-slate-500 dark:text-gray-400 hover:bg-slate-100 dark:hover:bg-gray-800 rounded-lg transition-colors" title="Project Logs">
+                <button onClick={handleOpenLogs} className="p-2 text-slate-500 dark:text-gray-400 hover:bg-slate-100 dark:hover:bg-gray-800 rounded-lg transition-colors" title="Project Logs">
                     <FileText size={18} />
                 </button>
                 <div className="relative" ref={desktopPublishRef}>
@@ -746,12 +799,13 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                     cloudConnectionError={localCloudError}
                     onCloudConnectRetry={handleCloudConnectRetry}
                     onClearCloudConnectionState={handleClearCloudConnectionState}
-                    onViewTrace={handleViewTrace}
                 />
                 {!isMobile && <div className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-indigo-500/50 active:bg-indigo-500 transition-colors z-10" onMouseDown={startResizing} />}
             </div>
 
             <div className={`flex-1 bg-slate-100 dark:bg-black/50 relative overflow-hidden flex flex-col items-center justify-center ${isMobile && mobileTab !== 'preview' ? 'hidden' : 'flex'}`}>
+                
+                {/* Deployment Overlay */}
                 {isDeployingAnywhere && (
                     <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex flex-col items-center justify-center text-white animate-in fade-in duration-300">
                         <div className="flex flex-col items-center gap-6">
@@ -759,18 +813,37 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                                 <Rocket className="w-16 h-16 text-indigo-500 animate-bounce" />
                                 <div className="absolute inset-0 bg-indigo-500/30 blur-2xl rounded-full"></div>
                             </div>
+                            
                             <div className="flex flex-col items-center gap-2">
-                                <h3 className="text-xl font-bold tracking-tight">{isManualDeploying ? "Deploying to Web..." : "Launching to Web..."}</h3>
+                                <h3 className="text-xl font-bold tracking-tight">
+                                    {isManualDeploying ? "Deploying to Web..." : "Launching to Web..."}
+                                </h3>
                                 <p className="text-slate-400 text-sm">Validating assets and pushing to Vercel edge network</p>
                             </div>
+
                             <div className="w-64 h-1.5 bg-slate-700/50 rounded-full overflow-hidden">
                                 <div className="h-full bg-indigo-500 w-1/2 animate-[shimmer_1.5s_infinite] rounded-full relative overflow-hidden">
                                     <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent skew-x-12 animate-[slide_1s_infinite]"></div>
                                 </div>
                             </div>
+                            
+                            <style>
+                                {`
+                                    @keyframes shimmer {
+                                        0% { transform: translateX(-100%); width: 20%; }
+                                        50% { width: 80%; }
+                                        100% { transform: translateX(200%); width: 20%; }
+                                    }
+                                    @keyframes slide {
+                                        from { transform: translateX(-100%); }
+                                        to { transform: translateX(200%); }
+                                    }
+                                `}
+                            </style>
                         </div>
                     </div>
                 )}
+                
                 <div className={`transition-all duration-300 ${deviceSizeClass} ${deviceMode !== 'desktop' ? 'my-8 shadow-2xl border-8 border-slate-800 rounded-[2rem] overflow-hidden bg-white' : ''}`}>
                     {viewMode === 'preview' ? (
                         <PreviewCanvas 
@@ -778,7 +851,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                             files={project.files}
                             isGenerating={isThinking}
                             isUpdating={isUpdating}
-                            onRuntimeError={handleRuntimeError} 
+                            onRuntimeError={handleRuntimeError} // Use the robust handler
                             projectId={project.id}
                             active={!isMobile || mobileTab === 'preview'}
                             externalUrl={previewUrl}
@@ -795,6 +868,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                 </div>
             </div>
         </div>
+
         {showManageDomains && <ManageDomainsModal project={project} user={user} onClose={() => setShowManageDomains(false)} onUpdate={fetchProject} />}
     </div>
   );

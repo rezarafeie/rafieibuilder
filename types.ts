@@ -1,13 +1,6 @@
 
-export interface AIDebugLog {
-  id: string;
-  timestamp: number;
-  stepKey: string;
-  model: string;
-  systemInstruction: string;
-  prompt: string;
-  response: string;
-}
+
+
 
 export interface GeneratedCode {
   html: string;
@@ -62,22 +55,28 @@ export interface ProjectFile {
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system';
-  content?: string;
+  content?: string; // Made optional to allow messages like build_plan to exist without a direct 'content' string
   timestamp: number;
   images?: string[];
+  // Refined message types for better UX storytelling
   type?: 'user_input' | 'assistant_response' | 'build_plan' | 'build_phase' | 'build_status' | 'build_error' | 'action_required' | 'final_summary';
+  // New lifecycle status for messages (makes icons and progress dynamic)
   status?: 'pending' | 'working' | 'completed' | 'failed'; 
+  // Explicit icon (e.g., 'loader', 'check', 'x')
   icon?: string; 
+  // Data for build_plan type
   planData?: { title: string, status: 'pending' | 'active' | 'completed' | 'failed' }[];
+  // Current step within a phase for build_phase type
   currentStepProgress?: { current: number; total: number; stepName: string; };
+  // Detailed technical logs/JSON for expandable view
   details?: string;
+  // Whether the details section should be expandable/visible
   isExpandable?: boolean;
   requiresAction?: string;
   executionTimeMs?: number;
   creditsUsed?: number;
   providerUsed?: string;
   modelUsed?: string;
-  aiInteractions?: AIDebugLog[]; // Added for detailed trace visibility
 }
 
 export interface RafieiCloudProject {
