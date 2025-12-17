@@ -35,7 +35,7 @@ const getSystemPrompt = async (key: string, defaultVal: string): Promise<string>
 
     // 2. Check DB
     try {
-        const { data } = await supabase.from('system_settings').select('value').eq('key', key).single();
+        const { data } = await supabase.from('system_settings').select('value').eq('key', key).maybeSingle();
         if (data?.value) {
             promptCache[key] = data.value;
             return data.value;

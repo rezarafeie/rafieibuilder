@@ -409,8 +409,8 @@ export const constructMultiFileDocument = (rawFiles: ProjectFile[], projectId?: 
     <script crossorigin src="https://unpkg.com/history@5.3.0/umd/history.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-router@6.3.0/umd/react-router.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-router-dom@6.3.0/umd/react-router-dom.development.js"></script>
-    <!-- Use newer, stable Lucide React UMD -->
-    <script src="https://unpkg.com/lucide-react@0.469.0/dist/umd/lucide-react.min.js"></script>
+    <!-- Use stable Lucide React UMD v0.294.0 -->
+    <script src="https://unpkg.com/lucide-react@0.294.0/dist/umd/lucide-react.min.js"></script>
     <script src="https://unpkg.com/clsx@2.0.0/dist/clsx.min.js"></script>
     <script src="https://unpkg.com/tailwind-merge@2.2.0/dist/bundle.min.js"></script>
     
@@ -453,7 +453,14 @@ export const constructMultiFileDocument = (rawFiles: ProjectFile[], projectId?: 
           if (cleanPath === 'react') return window.React || { createElement: () => null };
           if (cleanPath === 'react-dom') return window.ReactDOM || { createRoot: () => ({ render: () => {} }) };
           if (cleanPath === 'react-dom/client') return window.ReactDOM || { createRoot: () => ({ render: () => {} }) };
-          if (cleanPath === 'react-router-dom') return window.ReactRouterDOM || { BrowserRouter: ({children}) => children };
+          
+          // Enhanced Router Shim: Alias BrowserRouter to HashRouter for iframe compat
+          if (cleanPath === 'react-router-dom') {
+              const lib = window.ReactRouterDOM;
+              if (!lib) return { BrowserRouter: ({children}) => children, HashRouter: ({children}) => children, Routes: () => null, Route: () => null };
+              return { ...lib, BrowserRouter: lib.HashRouter };
+          }
+
           if (cleanPath === '@supabase/supabase-js') return window.supabase || { createClient: () => ({}) };
           
           // Library Support Shims
