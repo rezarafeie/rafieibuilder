@@ -57,7 +57,7 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
     if (config.id === 'google') {
         const ai = new GoogleGenAI({ apiKey: config.apiKey });
         const reqConfig: any = { 
-            systemInstruction: "IMPORTANT: You are a headless API endpoint. Return ONLY pure valid JSON. No Markdown. No code fences. No preamble. NO PLACEHOLDERS. GENERATE FULL FUNCTIONAL CODE.\n\n" + systemInstruction, 
+            systemInstruction: "ACT AS A HEADLESS CODE GENERATION API. RETURN ONLY RAW JSON. NO MARKDOWN. NO CHAT. NO INSTRUCTIONS. NO PLACEHOLDERS.\n\n" + systemInstruction, 
             temperature: 0.1, 
             maxOutputTokens: 8192 
         };
@@ -146,96 +146,67 @@ const remedyJson = (s: string): string => {
 
 const extractJson = (text: string | undefined): any => {
     if (!text) throw new Error("Empty response from AI");
-    
     let cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
-
     const tryParse = (str: string) => {
         try { return JSON.parse(str); } catch (e) {
             try { return JSON.parse(remedyJson(str)); } catch (e2) { return null; }
         }
     };
-
     let res = tryParse(cleaned);
     if (res) return res;
-
-    // Advanced Regex for greedy block finding
     const blocks = cleaned.match(/\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}|\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]/g);
     if (blocks) {
-        // Search from end (often AI puts final JSON at the very bottom)
         for (let i = blocks.length - 1; i >= 0; i--) {
             res = tryParse(blocks[i]);
             if (res) return res;
         }
     }
-
     const startBrace = cleaned.indexOf('{');
     const startBracket = cleaned.indexOf('[');
     const start = (startBrace !== -1 && (startBracket === -1 || startBrace < startBracket)) ? startBrace : startBracket;
     const end = Math.max(cleaned.lastIndexOf('}'), cleaned.lastIndexOf(']'));
-
     if (start !== -1 && end !== -1 && end > start) {
         res = tryParse(cleaned.substring(start, end + 1));
         if (res) return res;
     }
-
-    console.error("CRITICAL_PARSING_FAIL. Raw Input:", text);
-    throw new Error("The AI provided an invalid response format. This usually happens when instructions are too complex. Please try a simpler prompt.");
+    console.error("PARSING_CRITICAL_FAIL. Raw:", text);
+    throw new Error("AI returned invalid data format. Please retry.");
 };
 
 export const PROMPT_KEYS = {
-    'DECISION': 'sys_prompt_decision_v7', 
-    'REQUIREMENTS': 'sys_prompt_requirements_v5',
-    'PHASE_PLANNER': 'sys_prompt_phase_planner_v7', 
-    'DESIGN': 'sys_prompt_design_v5',
-    'PLANNER': 'sys_prompt_planner_v6', 
-    'BUILDER': 'sys_prompt_builder_v6', 
-    'REPAIR': 'sys_prompt_repair_v5',
-    'REPAIR_PLANNER': 'sys_prompt_repair_planner_v5',
-    'TITLE': 'sys_prompt_title_v1'
+    'DECISION': 'sys_prompt_decision_v8', 
+    'REQUIREMENTS': 'sys_prompt_requirements_v6',
+    'PHASE_PLANNER': 'sys_prompt_phase_planner_v8', 
+    'DESIGN': 'sys_prompt_design_v6',
+    'PLANNER': 'sys_prompt_planner_v7', 
+    'BUILDER': 'sys_prompt_builder_v7', 
+    'REPAIR': 'sys_prompt_repair_v6',
+    'REPAIR_PLANNER': 'sys_prompt_repair_planner_v6',
+    'TITLE': 'sys_prompt_title_v2'
 };
 
 export const DEFAULTS = {
-    DECISION: `Role: Strategic Intent Router.
-Goal: Map user prompt to intent.
-Rules:
-- intent: "new_build" (fresh project), "update" (incremental changes to existing), "chat" (just talking), "repair" (fixing bugs).
-Return ONLY JSON: {"analysis": {"intent": "new_build"|"update"|"chat"|"repair", "complexity": "low"|"med"|"high"}, "narrative_summary": "...", "response_message": "..."}`,
+    DECISION: `Return ONLY JSON: {"analysis": {"intent": "new_build"|"update"|"chat"|"repair", "complexity": "low"|"med"|"high"}, "narrative_summary": "Short descriptive summary", "response_message": "Friendly response"}`,
 
-    REQUIREMENTS: `Role: Backend Architect.
-Rules:
-- needs_backend: true if user needs data persistence, auth, or storage.
-Return ONLY JSON: {"needs_backend": boolean, "reasoning": "...", "features": []}`,
+    REQUIREMENTS: `Return ONLY JSON: {"needs_backend": boolean, "reasoning": "Explain why", "features": []}`,
 
-    PHASE_PLANNER: `Role: React/Vite/Tailwind Project Architect.
-Rules:
-- NEVER use Python (.py) or raw HTML (.html) as your logic core.
-- The project MUST be a modern React SPA using Tailwind CSS.
-- Output a sequence of phases to build the FULL application.
-Return ONLY JSON: {"phases": [{"title": "...", "goal": "...", "type": "skeleton"|"ui"|"logic"|"backend"}]}`,
+    PHASE_PLANNER: `Role: Web Architect.
+Rule: Do NOT output CLI steps. Do NOT output "npm install". 
+Only output architectural phases.
+Return ONLY JSON: {"phases": [{"title": "Skeleton", "goal": "Setup core structure", "type": "skeleton"}, {"title": "UI", "goal": "Build visual components", "type": "ui"}]}`,
 
-    DESIGN: `Role: UI/UX Specialist. Generate design specs (color palette, spacing, typography).
-Return ONLY JSON: {"design_language": "modern/minimal", "pages": [{"route": "/", "sections": []}], "visual_spec": "..."}`,
+    DESIGN: `Return ONLY JSON: {"design_language": "modern", "pages": [{"route": "/", "sections": []}], "visual_spec": "{}"}`,
 
-    PLANNER: `Role: Senior Software Engineer.
-Rules:
-- Break phase into atomic steps.
-- Each step MUST target a specific file path (e.g., src/components/Hero.tsx).
-Return ONLY JSON: {"steps": [{"title": "...", "path": "src/...", "description": "..."}]}`,
+    PLANNER: `Rule: Break the phase into files to be created/updated.
+Return ONLY JSON: {"steps": [{"title": "Create App.tsx", "path": "src/App.tsx", "description": "Implement main UI"}]}`,
 
-    BUILDER: `Role: Expert React + Tailwind Developer.
-Rules:
-- NO PLACEHOLDERS. NO MOCK DATA.
-- Write COMPLETE, production-ready code.
-- Use Lucide React for icons.
-- If creating a component, export it as default.
-- If updating an existing file, provide the FULL updated content.
-Return ONLY JSON: {"file_changes": [{"path": "...", "content": "..."}]}`,
+    BUILDER: `Role: React Coder. 
+Rule: Output the FULL FILE CONTENT. NO instructions. NO commentary. NO placeholders.
+Return ONLY JSON: {"file_changes": [{"path": "src/App.tsx", "content": "import React from 'react';..."}]}`,
 
-    REPAIR_PLANNER: `Role: Debugging Specialist. Provide minimal patches to fix runtime errors.
-Return ONLY JSON: {"patches": [{"path": "...", "content": "..."}], "explanation": "..."}`,
+    REPAIR_PLANNER: `Return ONLY JSON: {"patches": [{"path": "...", "content": "..."}], "explanation": "Fixed bug"}`,
 
-    TITLE: `Role: Creative Copywriter. Generate a short (2-3 words) catchy project name based on prompt. 
-Return ONLY JSON: {"title": "..."}`
+    TITLE: `Return ONLY JSON: {"title": "Catchy App Name"}`
 };
 
 export interface SupervisorCallbacks {
@@ -281,14 +252,6 @@ export class GenerationSupervisor {
         return str;
     }
 
-    private getFileSummary() {
-        return this.accumulatedFiles.map(f => {
-            const lines = f.content.split('\n');
-            const components = lines.filter(l => (l.includes('export default function') || (l.includes('const ') && l.includes('= ('))) && l.length < 100).map(l => l.trim());
-            return `File: ${f.path}, Sections found: ${components.join(', ')}`;
-        }).join('\n');
-    }
-
     private async runStep(key: string, prompt: string, sysPromptDefault: string, logicalMessageKey: string): Promise<any> {
         this.checkAbort();
         let sys = await getSystemPrompt(key, sysPromptDefault);
@@ -301,11 +264,11 @@ export class GenerationSupervisor {
             try {
                 const { text: resText, usage } = await robustGenerate(prompt, sys, this.project.id, this.project.userId, key, this.images, {messageId: logicalMessageKey});
                 const json = extractJson(resText);
-                return { json, usage, executionTime: 0, raw: resText };
+                return { json, usage, raw: resText };
             } catch (e: any) {
                 lastError = e;
                 await this.callbacks.onError(e.message || "Unknown error", 2 - i);
-                await new Promise(r => setTimeout(r, 2000));
+                await new Promise(r => setTimeout(r, 1000));
             }
         }
         throw lastError;
@@ -313,9 +276,9 @@ export class GenerationSupervisor {
 
     public async repair(initialError: string) {
         const messageId = (await this.callbacks.onBuildMessage('repair_mode', { type: 'build_status', content: "thinking ....", status: 'working', icon: 'wrench' })).id;
-        for (let attempt = 1; attempt <= 5; attempt++) {
+        for (let attempt = 1; attempt <= 3; attempt++) {
             this.checkAbort();
-            const repairResult = await this.runStep(PROMPT_KEYS['REPAIR_PLANNER'], JSON.stringify({ error: initialError, files: this.accumulatedFiles }), DEFAULTS.REPAIR_PLANNER, messageId);
+            const repairResult = await this.runStep(PROMPT_KEYS['REPAIR_PLANNER'], JSON.stringify({ error: initialError, files: this.accumulatedFiles.map(f => ({path: f.path, summary: f.content.substring(0, 500)})) }), DEFAULTS.REPAIR_PLANNER, messageId);
             const { patches, explanation } = repairResult.json;
             if (patches && patches.length > 0) {
                 const patchMap = new Map<string, any>(patches.map((p: any) => [p.path.replace(/^\.?\//, ''), p]));
@@ -325,9 +288,9 @@ export class GenerationSupervisor {
                 });
                 await this.callbacks.onChunkComplete({ html: '', javascript: '', css: '', explanation }, `Fixed: ${explanation}`, { files: this.accumulatedFiles });
                 if (this.callbacks.waitForPreview) {
-                    const validation = await this.callbacks.waitForPreview(8000);
+                    const validation = await this.callbacks.waitForPreview(5000);
                     if (validation.success) {
-                         await this.callbacks.onBuildMessage('repair_mode', { id: messageId, content: "thinking ....", status: 'completed', icon: 'check', details: `Attempt ${attempt}: ${explanation}` });
+                         await this.callbacks.onBuildMessage('repair_mode', { id: messageId, status: 'completed', icon: 'check', details: `Repair Successful: ${explanation}` });
                          await this.callbacks.onSuccess(this.project.code, "Repair complete.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
                          return;
                     }
@@ -343,10 +306,7 @@ export class GenerationSupervisor {
             
             // 1. DECISION
             const decisionMsgId = (await this.callbacks.onBuildMessage('decision_thinking', { type: 'build_status', content: this.t('analyzingRequest'), status: 'working', icon: 'loader' })).id;
-            const existingPaths = this.accumulatedFiles.map(f => f.path).join(', ');
-            const fileSummary = this.getFileSummary();
-
-            const decisionResult = await this.runStep(PROMPT_KEYS['DECISION'], `USER REQUEST: ${this.userPrompt}\nEXISTING_FILES: ${existingPaths || 'NONE'}\nFILE_SUMMARY: ${fileSummary}\nIS_RESUME: ${isResume}`, DEFAULTS.DECISION, decisionMsgId);
+            const decisionResult = await this.runStep(PROMPT_KEYS['DECISION'], `PROMPT: ${this.userPrompt}\nFILES: ${this.accumulatedFiles.map(f=>f.path).join(',')}`, DEFAULTS.DECISION, decisionMsgId);
             const decision = decisionResult.json;
             const intent = decision.analysis.intent;
 
@@ -356,94 +316,71 @@ export class GenerationSupervisor {
                 return;
             }
 
-            if (intent === 'config') {
-                await this.callbacks.onBuildMessage('decision_thinking', { id: decisionMsgId, type: 'action_required', content: decision.response_message || "thinking ....", requiresAction: 'CONNECT_DATABASE', status: 'pending', icon: 'settings' });
-                await this.callbacks.onSuccess(this.project.code, "Config requested.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
-                return;
-            }
-
             if (intent === 'repair') {
-                await this.callbacks.onBuildMessage('decision_thinking', { id: decisionMsgId, content: "thinking ....", status: 'completed', icon: 'wrench' });
+                await this.callbacks.onBuildMessage('decision_thinking', { id: decisionMsgId, status: 'completed', icon: 'wrench' });
                 await this.repair("User reported: " + this.userPrompt);
                 return;
             }
 
-            await this.callbacks.onBuildMessage('decision_thinking', { id: decisionMsgId, content: decision.narrative_summary, status: 'completed', icon: 'check', details: JSON.stringify(decision.analysis, null, 2) });
+            await this.callbacks.onBuildMessage('decision_thinking', { id: decisionMsgId, content: decision.narrative_summary, status: 'completed', icon: 'check' });
 
             // 2. REQUIREMENTS
             const reqMsgId = (await this.callbacks.onBuildMessage('req_thinking', { type: 'build_status', content: this.t('checkingBackend'), status: 'working', icon: 'loader' })).id;
-            const requirementsResult = await this.runStep(PROMPT_KEYS['REQUIREMENTS'], JSON.stringify({ request: this.userPrompt, intent, analysis: decision }), DEFAULTS.REQUIREMENTS, reqMsgId);
+            const requirementsResult = await this.runStep(PROMPT_KEYS['REQUIREMENTS'], JSON.stringify({ request: this.userPrompt, intent }), DEFAULTS.REQUIREMENTS, reqMsgId);
             const requirements = requirementsResult.json;
 
-            const shouldBlockForBackend = (requirements.needs_backend || requirements.backendRequired) && !this.userPrompt.toLowerCase().includes('skip backend');
-            if (shouldBlockForBackend && (!this.project.rafieiCloudProject || this.project.rafieiCloudProject.status !== 'ACTIVE')) {
-                await this.callbacks.onBuildMessage('req_thinking', { id: reqMsgId, type: 'action_required', content: this.t('backendActionRequired'), requiresAction: 'CONNECT_DATABASE', status: 'pending', icon: 'warning', details: requirements.reasoning });
+            if (requirements.needs_backend && (!this.project.rafieiCloudProject || this.project.rafieiCloudProject.status !== 'ACTIVE')) {
+                await this.callbacks.onBuildMessage('req_thinking', { id: reqMsgId, type: 'action_required', content: this.t('backendActionRequired'), requiresAction: 'CONNECT_DATABASE', status: 'pending', icon: 'warning' });
                 await this.callbacks.onSuccess(this.project.code, "Backend required.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
                 return;
             }
-            await this.callbacks.onBuildMessage('req_thinking', { id: reqMsgId, content: "thinking ....", status: 'completed', icon: 'check', details: requirements.reasoning });
+            await this.callbacks.onBuildMessage('req_thinking', { id: reqMsgId, status: 'completed', icon: 'check' });
 
             // 3. PHASE PLANNING
-            let phases: Phase[] = [];
             const planMsgId = (await this.callbacks.onBuildMessage('plan_thinking', { type: 'build_plan', content: this.t('creatingBuildPlan'), status: 'working', icon: 'loader' })).id;
-            const phasePlanResult = await this.runStep(PROMPT_KEYS['PHASE_PLANNER'], JSON.stringify({ request: this.userPrompt, intent, analysis: decision, requirements, existing_files: existingPaths, file_summary: fileSummary, is_resume: isResume }), DEFAULTS.PHASE_PLANNER, planMsgId);
-            phases = phasePlanResult.json.phases.map((p: any) => ({ id: crypto.randomUUID(), title: p.title, description: p.goal, status: 'pending', retryCount: 0, type: p.type || 'ui' }));
+            const phasePlanResult = await this.runStep(PROMPT_KEYS['PHASE_PLANNER'], JSON.stringify({ request: this.userPrompt, intent }), DEFAULTS.PHASE_PLANNER, planMsgId);
+            const phases: Phase[] = phasePlanResult.json.phases.map((p: any) => ({ id: crypto.randomUUID(), title: p.title, description: p.goal, status: 'pending', retryCount: 0, type: p.type || 'ui' }));
             await this.callbacks.onPlanUpdate(phases);
-            await this.callbacks.onBuildMessage('plan_thinking', { id: planMsgId, content: "thinking ....", planData: phases.map(p => ({ title: p.title, status: 'pending' })), status: 'completed', icon: 'check', details: `Orchestrating ${phases.length} phases.` });
+            await this.callbacks.onBuildMessage('plan_thinking', { id: planMsgId, planData: phases.map(p => ({ title: p.title, status: 'pending' })), status: 'completed', icon: 'check' });
 
-            // 4. DESIGN SPEC
-            if (intent === 'new_build' && !isResume) {
-                const designMsgId = (await this.callbacks.onBuildMessage('design_thinking', { type: 'build_phase', content: this.t('startingDesign'), status: 'working', icon: 'loader' })).id;
-                const designResult = await this.runStep(PROMPT_KEYS['DESIGN'], JSON.stringify({ request: this.userPrompt, phases }), DEFAULTS.DESIGN, designMsgId);
-                await this.callbacks.onBuildMessage('design_thinking', { id: designMsgId, content: "thinking ....", status: 'completed', icon: 'check', details: JSON.stringify(designResult.json, null, 2) });
-            }
-
-            // 5. EXECUTION LOOP
+            // 4. EXECUTION LOOP
             for (let i = 0; i < phases.length; i++) {
                 const phase = phases[i];
                 this.checkAbort();
                 if (isResume && phase.status === 'completed') continue;
 
-                const phaseMsgId = (await this.callbacks.onBuildMessage(`phase_${phase.id}_thinking`, { type: 'build_phase', content: this.t('startingPhase', {phaseTitle: phase.title}), status: 'working', icon: 'loader' })).id;
+                const phaseMsgId = (await this.callbacks.onBuildMessage(`phase_${i}_thinking`, { type: 'build_phase', content: this.t('startingPhase', {phaseTitle: phase.title}), status: 'working', icon: 'loader' })).id;
                 await this.callbacks.onPhaseStart(i, { text: phase.title });
                 
-                const detailedPlanResult = await this.runStep(PROMPT_KEYS['PLANNER'], JSON.stringify({ phase, user_request: this.userPrompt, existing_files: this.accumulatedFiles.map(f => ({ path: f.path, summary: f.content.substring(0, 1000) })) }), DEFAULTS.PLANNER, phaseMsgId);
+                const detailedPlanResult = await this.runStep(PROMPT_KEYS['PLANNER'], JSON.stringify({ phase }), DEFAULTS.PLANNER, phaseMsgId);
                 const steps = detailedPlanResult.json.steps || [];
 
                 for (let j = 0; j < steps.length; j++) {
                     const step = steps[j];
                     this.checkAbort();
-                    const stepMsgId = (await this.callbacks.onBuildMessage(`phase_${phase.id}_step_${j}`, { type: 'build_phase', content: this.t('buildingPhase', {phaseTitle: phase.title, filePath: step.path}), status: 'working', icon: 'loader', currentStepProgress: { current: j + 1, total: steps.length, stepName: step.title } })).id;
+                    const stepMsgId = (await this.callbacks.onBuildMessage(`phase_${i}_step_${j}_thinking`, { type: 'build_phase', content: this.t('buildingPhase', {phaseTitle: phase.title, filePath: step.path}), status: 'working', icon: 'loader', currentStepProgress: { current: j + 1, total: steps.length, stepName: step.title } })).id;
                     
                     const targetFile = this.accumulatedFiles.find(f => f.path === step.path);
-                    const codeRes = await this.runStep(PROMPT_KEYS['BUILDER'], JSON.stringify({ 
-                        task: step.description, 
-                        file_path: step.path, 
-                        existing_content: targetFile?.content || "",
-                        other_files_summary: fileSummary
-                    }), DEFAULTS.BUILDER, stepMsgId);
+                    const codeRes = await this.runStep(PROMPT_KEYS['BUILDER'], JSON.stringify({ task: step.description, file_path: step.path, existing_content: targetFile?.content || "" }), DEFAULTS.BUILDER, stepMsgId);
                     
                     if (codeRes.json.file_changes) {
-                        const changes = codeRes.json.file_changes as any[];
-                        for (const c of changes) {
+                        for (const c of codeRes.json.file_changes) {
                             const idx = this.accumulatedFiles.findIndex(f => f.path === c.path);
-                            if (idx !== -1) {
-                                this.accumulatedFiles[idx] = { ...this.accumulatedFiles[idx], content: sanitizeFileContent((c as any).content, c.path) };
-                            } else {
-                                this.accumulatedFiles.push({ path: c.path, content: sanitizeFileContent((c as any).content, c.path), type: 'file' });
-                            }
+                            const sanitized = sanitizeFileContent(c.content, c.path);
+                            if (idx !== -1) this.accumulatedFiles[idx].content = sanitized;
+                            else this.accumulatedFiles.push({ path: c.path, content: sanitized, type: 'file' });
                         }
                     }
                     await this.callbacks.onChunkComplete({ html: '', javascript: '', css: '', explanation: `Built ${step.path}` }, `Built ${step.path}`, { files: this.accumulatedFiles });
-                    await this.callbacks.onBuildMessage(`phase_${phase.id}_step_${j}`, { id: stepMsgId, content: "thinking ....", status: 'completed', icon: 'check', details: `File: ${step.path}\nGoal: ${step.description}` });
+                    await this.callbacks.onBuildMessage(`phase_${i}_step_${j}_thinking`, { id: stepMsgId, status: 'completed', icon: 'check' });
                 }
                 phase.status = 'completed';
                 await this.callbacks.onPhaseComplete(i);
-                await this.callbacks.onBuildMessage(`phase_${phase.id}_thinking`, { id: phaseMsgId, content: "thinking ....", status: 'completed', icon: 'check' });
+                await this.callbacks.onBuildMessage(`phase_${i}_thinking`, { id: phaseMsgId, status: 'completed', icon: 'check' });
             }
 
-            const successMsg = this.lang === 'fa' ? "🎉 ساخت و بروزرسانی با موفقیت انجام شد!" : "🎉 Build and updates completed successfully!";
-            await this.callbacks.onSuccess({ html: '', javascript: '', css: '', explanation: 'Success' }, successMsg, { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
+            const successMsg = this.lang === 'fa' ? "🎉 برنامه شما با موفقیت ساخته شد!" : "🎉 Your application has been built successfully!";
+            await this.callbacks.onSuccess(this.project.code, successMsg, { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
 
         } catch (e: any) {
             console.error("Supervisor Failure:", e);
@@ -456,7 +393,6 @@ export const handleUserIntent = async (project: Project, prompt: string) => ({ i
 
 export const generateProjectTitle = async (prompt: string, user: User, project: Project): Promise<string> => {
     try {
-        const config = await getActiveProvider();
         const { text } = await robustGenerate(`Prompt: ${prompt}`, DEFAULTS.TITLE, project.id, user.id, 'TITLE');
         const json = extractJson(text);
         return json.title || "My AI App";
