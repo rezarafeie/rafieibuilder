@@ -648,7 +648,8 @@ export const cloudService = {
                     try { await this.saveProject(updated); } catch(e) { console.warn("Background save failed (Final Error):", e); }
                 }
             },
-            signal
+            signal,
+            lang // Pass the determined language to the supervisor
         );
 
         supervisor.start().catch(console.error);
@@ -820,6 +821,17 @@ export const cloudService = {
         return { data: data || [], count: count || 0 };
     },
 
+    // New method for searching users by email (admin only)
+    async searchUsers(query: string): Promise<any[]> {
+        const { data, error } = await supabase
+            .rpc('get_all_users')
+            .ilike('email', `%${query}%`)
+            .limit(5);
+            
+        if (error) throw error;
+        return data || [];
+    },
+
     async getSystemLogs(page = 1, limit = 10): Promise<{ data: SystemLog[], count: number }> {
         const from = (page - 1) * limit;
         const to = from + limit - 1;
@@ -961,14 +973,18 @@ export const cloudService = {
         }));
     },
 
-    async adminAdjustCredit(userId: string, amount: number, note: string, adminEmail: string): Promise<void> {
+    // Fixed: Removed 'adminEmail' param to match updated SQL
+    async adminAdjustCredit(userId: string, amount: number, note: string): Promise<void> {
         const { error } = await supabase.rpc('admin_adjust_balance', {
             p_target_user_id: userId,
             p_amount: amount,
-            p_description: note,
-            p_admin_email: adminEmail
+            p_description: note
         });
-        if (error) throw error;
+        
+        if (error) {
+            console.error("RPC admin_adjust_balance failed:", error);
+            throw error;
+        }
     },
 
     mapProject(p: any): Project {

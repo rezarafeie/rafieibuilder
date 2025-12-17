@@ -52,9 +52,10 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   });
   
   // Deployment States
-  const [isAutoDeploying, setIsAutoDeploying] = useState(false); // For auto-deploy after AI build
+  const [isAutoDeploying, setIsAutoDeploying] = useState(false); // For auto-deploy after AI build (Disabled now, kept for manual hooks if needed)
   const [isManualDeploying, setIsManualDeploying] = useState(false); // For user-triggered publish
   const [manualDeployError, setManualDeployError] = useState<string | null>(null);
+  const [fallbackToLocalPreview, setFallbackToLocalPreview] = useState(false); // New state to force local preview on deploy failure
 
   const projectRef = useRef<Project | null>(null);
   const lastSuggestionMessageIdRef = useRef<string | null>(null);
@@ -117,10 +118,9 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   // Unified Deployment state for overlay
   const isDeployingAnywhere = isAutoDeploying || isManualDeploying;
 
-  // Logic: Show Vercel URL ONLY if we are completely idle (not building, not deploying) and have a URL.
-  // This ensures that during editing/building/deploying, we see the local builder preview.
-  const showVercelPreview = !isBuilding && !isDeployingAnywhere && project?.vercelConfig?.productionUrl;
-  const previewUrl = showVercelPreview ? project.vercelConfig?.productionUrl : undefined;
+  // FORCE LOCAL PREVIEW: We always return undefined for externalUrl to ensure the iframe uses srcDoc (generated code).
+  // The Vercel URL is still accessible via the Publish Dropdown.
+  const previewUrl = undefined; 
 
   // Safe wrapper for runtime errors to prevent flashing on initial load
   const handleRuntimeError = (error: string) => {
@@ -286,6 +286,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
     isAutoFixingRef.current = false;
     isUserStoppedRef.current = false;
     autoStartRef.current = false;
+    setFallbackToLocalPreview(false); // Reset on project load
   }, [projectId]);
 
   useEffect(() => {
@@ -411,12 +412,14 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   const handleManualDeployStart = () => {
       setIsManualDeploying(true);
       setManualDeployError(null);
+      setFallbackToLocalPreview(false); // Reset fallback on new attempt
   };
 
   const handleManualDeployComplete = useCallback(async (vercelConfig: VercelConfig | null, error: string | null) => {
       if (error) {
           setManualDeployError(error);
           setIsManualDeploying(false);
+          setFallbackToLocalPreview(true); // Force local preview if deploy failed (e.g. rate limit)
       } else if (vercelConfig) {
           // Wait 2 seconds before showing the live URL to allow overlay to show completion state
           await new Promise(resolve => setTimeout(resolve, 2000));
@@ -431,7 +434,6 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
           setIsManualDeploying(false);
           setShowPublishDropdown(false); // Close dropdown
-          // PreviewCanvas will automatically pick up the new externalUrl from project.vercelConfig
       }
   }, []);
 
@@ -445,6 +447,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
     handleClearCloudConnectionState();
     setRuntimeError(null);
     isUserStoppedRef.current = false;
+    setFallbackToLocalPreview(false); // Reset fallback when starting new build
 
     if (!isAutoFix && !isInitialAutoStart) {
         autoRepairAttemptsRef.current = 0;
@@ -470,7 +473,13 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
         setProject(updatedProject);
     }
 
-    const initialLogs = ["Initiating build process...", "Analyzing request...", "Preparing environment..."];
+    // Using translation keys for logs instead of hardcoded English
+    const initialLogs = [
+        t('initBuild'),
+        t('analyzingReq'),
+        t('preparingEnv')
+    ];
+    
     setBuildState({
         plan: [],
         phases: [],
@@ -517,23 +526,8 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                 setPendingPrompt({ content, images });
             }
 
-            // --- AUTO DEPLOY TO VERCEL ON COMPLETION ---
-            if (updatedState.status === 'idle' && updatedState.buildState?.error === null && !isUserStoppedRef.current) {
-                setIsAutoDeploying(true); // Start auto-deploying overlay
-                vercelService.publishProject(updatedState).then(async (vercelConfig) => {
-                    // Wait 2 seconds to show completion state before switching view
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-
-                    const finalProject = { ...updatedState, vercelConfig, publishedUrl: vercelConfig.productionUrl };
-                    setProject(finalProject);
-                    cloudService.saveProject(finalProject);
-                    
-                    setIsAutoDeploying(false); // This will switch previewUrl to vercelConfig.productionUrl
-                }).catch(e => {
-                    console.warn("Auto-deploy failed", e);
-                    setIsAutoDeploying(false);
-                });
-            }
+            // --- AUTO DEPLOYMENT REMOVED ---
+            // Deployment is now exclusively manual via the Publish Dropdown.
         };
 
         cloudService.triggerBuild(projectToBuild, content, images, onUpdateCallback);

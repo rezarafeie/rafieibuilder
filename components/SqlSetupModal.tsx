@@ -235,7 +235,6 @@ DROP POLICY IF EXISTS "Admins view all transactions" ON public.credit_transactio
 CREATE POLICY "Admins view all transactions" ON public.credit_transactions FOR SELECT USING (auth.jwt() ->> 'email' = 'rezarafeie13@gmail.com');
 
 -- 5. RPC: Process AI Charge
--- Clean up potential old signatures to avoid overloads
 DROP FUNCTION IF EXISTS process_ai_charge(uuid, uuid, text, text, bigint, bigint, numeric);
 DROP FUNCTION IF EXISTS process_ai_charge(uuid, uuid, text, text, bigint, bigint, numeric, jsonb);
 
@@ -279,19 +278,26 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- 6. RPC: Admin Adjust Balance
+-- CRITICAL: Drop BOTH old signatures to prevent conflicts
+DROP FUNCTION IF EXISTS admin_adjust_balance(uuid, numeric, text, text);
+DROP FUNCTION IF EXISTS admin_adjust_balance(uuid, numeric, text);
+
 CREATE OR REPLACE FUNCTION admin_adjust_balance(
     p_target_user_id UUID,
     p_amount NUMERIC,
-    p_description TEXT,
-    p_admin_email TEXT
+    p_description TEXT
 ) RETURNS JSONB SECURITY DEFINER AS $$
 BEGIN
-    IF p_admin_email != 'rezarafeie13@gmail.com' THEN
+    -- Securely check admin email from JWT instead of trusting client parameter
+    IF (auth.jwt() ->> 'email') IS DISTINCT FROM 'rezarafeie13@gmail.com' THEN
         RAISE EXCEPTION 'Access Denied: Admin only';
     END IF;
 
-    -- Update Balance
-    UPDATE public.user_settings SET credits_balance = credits_balance + p_amount WHERE user_id = p_target_user_id;
+    -- Upsert Balance with COALESCE to handle NULL existing balances safely
+    INSERT INTO public.user_settings (user_id, credits_balance)
+    VALUES (p_target_user_id, 10.0000 + p_amount)
+    ON CONFLICT (user_id) DO UPDATE
+    SET credits_balance = COALESCE(public.user_settings.credits_balance, 0) + p_amount;
     
     -- Log Transaction
     INSERT INTO public.credit_transactions (user_id, amount, type, description, currency, exchange_rate)

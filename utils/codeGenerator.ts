@@ -2,6 +2,9 @@
 import { GeneratedCode, ProjectFile, Project } from "../types";
 import { getCurrentLanguage } from './translations';
 
+// Silence false positive for 'require' inside template strings if parsed incorrectly
+declare var require: any;
+
 // --- CONSTANTS & TEMPLATES ---
 
 const DEFAULT_MAIN_TSX = `
@@ -35,9 +38,9 @@ export default function App() {
 `.trim();
 
 const DEFAULT_INDEX_CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Vazirmatn:wght@400;500;600;700&display=swap');
 body { 
-  font-family: 'Inter', system-ui, -apple-system, sans-serif; 
+  font-family: 'Vazirmatn', 'Inter', system-ui, -apple-system, sans-serif; 
   margin: 0;
   padding: 0;
 }
@@ -50,6 +53,17 @@ const DEFAULT_INDEX_HTML = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>App</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Vazirmatn', 'Inter', 'sans-serif'],
+            }
+          }
+        }
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
@@ -348,7 +362,24 @@ export const constructMultiFileDocument = (rawFiles: ProjectFile[], projectId?: 
     <script crossorigin src="https://unpkg.com/history@5.3.0/umd/history.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-router@6.3.0/umd/react-router.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-router-dom@6.3.0/umd/react-router-dom.development.js"></script>
-    <script src="https://unpkg.com/lucide-react@0.292.0/dist/umd/lucide-react.min.js"></script>
+    <!-- Use newer, stable Lucide React UMD -->
+    <script src="https://unpkg.com/lucide-react@0.469.0/dist/umd/lucide-react.min.js"></script>
+    <script src="https://unpkg.com/clsx@2.0.0/dist/clsx.min.js"></script>
+    <script src="https://unpkg.com/tailwind-merge@2.2.0/dist/bundle.min.js"></script>
+    
+    <!-- Force Tailwind CDN to ensure styling works even if index.html is missing it -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Vazirmatn', 'Inter', 'sans-serif'],
+            }
+          }
+        }
+      }
+    </script>
 
     <!-- Module Loader -->
     <script>
@@ -368,17 +399,52 @@ export const constructMultiFileDocument = (rawFiles: ProjectFile[], projectId?: 
           return stack.join('/');
       }
 
-      function require(path, base = 'src/main.tsx') {
-          // Built-ins
-          if (path === 'react') return window.React;
-          if (path === 'react-dom') return window.ReactDOM;
-          if (path === 'react-dom/client') return window.ReactDOM;
-          if (path === 'react-router-dom') return window.ReactRouterDOM;
-          if (path === 'lucide-react') return window.lucideReact;
-          if (path === '@supabase/supabase-js') return window.supabase;
+      function __require(path, base = 'src/main.tsx') {
+          const cleanPath = path.replace(/^node:/, '').trim();
+
+          // Built-ins (Return Safe Objects)
+          if (cleanPath === 'react') return window.React || { createElement: () => null };
+          if (cleanPath === 'react-dom') return window.ReactDOM || { createRoot: () => ({ render: () => {} }) };
+          if (cleanPath === 'react-dom/client') return window.ReactDOM || { createRoot: () => ({ render: () => {} }) };
+          if (cleanPath === 'react-router-dom') return window.ReactRouterDOM || { BrowserRouter: ({children}) => children };
+          if (cleanPath === '@supabase/supabase-js') return window.supabase || { createClient: () => ({}) };
+          
+          // Library Support Shims
+          // Matches 'lucide-react' AND 'lucide-react/dist/...' to handle subpath imports
+          if (cleanPath === 'lucide-react' || cleanPath.startsWith('lucide-react/')) {
+             // 1. Try global from UMD
+             let lib = window.lucideReact || window.lucide;
+             
+             // 2. If not loaded, use a Proxy to prevent crashes
+             if (!lib) {
+                 console.warn('lucide-react not loaded, using fallback proxy');
+                 lib = new Proxy({}, {
+                     get: (target, prop) => {
+                         if (prop === '__esModule') return true;
+                         // Return a dummy component for any icon access
+                         return (props) => window.React ? window.React.createElement('span', { 'data-icon': String(prop) }, '') : null;
+                     }
+                 });
+             }
+
+             // 3. CRITICAL FIX: Ensure 'default' export exists and points to the library itself.
+             // This fixes issues where Babel transpiles \`import Lucide from 'lucide-react'\` 
+             // into \`var Lucide = require('lucide-react').default\`, causing \`Lucide\` to be undefined.
+             if (!lib.default) {
+                 lib.default = lib;
+             }
+             
+             return lib;
+          }
+          
+          if (cleanPath === 'clsx') {
+              const f = window.clsx || (() => '');
+              return { clsx: f, default: f };
+          }
+          if (cleanPath === 'tailwind-merge') return window.twMerge || { twMerge: (s) => s };
 
           // Resolve
-          let resolved = resolvePath(base, path);
+          let resolved = resolvePath(base, cleanPath);
           const extensions = ['', '.tsx', '.ts', '.jsx', '.js', '.css', '.json'];
           let finalPath = null;
           
@@ -392,7 +458,7 @@ export const constructMultiFileDocument = (rawFiles: ProjectFile[], projectId?: 
               }
               if (!finalPath) {
                   // Fallback: try searching in src/ if bare import
-                  if (window.__SOURCES__['src/' + path]) return require('src/' + path, base);
+                  if (window.__SOURCES__['src/' + cleanPath]) return __require('src/' + cleanPath, base);
                   
                   // Index resolution
                   for (const ext of extensions) {
@@ -405,8 +471,8 @@ export const constructMultiFileDocument = (rawFiles: ProjectFile[], projectId?: 
           }
 
           if (!finalPath) {
-              console.warn('Module not found:', path, 'resolved to:', resolved);
-              return {}; 
+              console.warn('Module not found:', cleanPath, 'resolved to:', resolved);
+              return {}; // Return empty object to allow destructuring to fail gracefully (undefined vars) instead of throwing on property access
           }
 
           if (window.__MODULES__[finalPath]) return window.__MODULES__[finalPath].exports;
@@ -417,7 +483,9 @@ export const constructMultiFileDocument = (rawFiles: ProjectFile[], projectId?: 
 
           if (finalPath.endsWith('.css')) return {};
           if (finalPath.endsWith('.json')) {
-              module.exports = JSON.parse(source);
+              try {
+                  module.exports = JSON.parse(source);
+              } catch(e) { module.exports = {}; }
               return module.exports;
           }
 
@@ -433,7 +501,7 @@ export const constructMultiFileDocument = (rawFiles: ProjectFile[], projectId?: 
               
               const func = new Function('require', 'module', 'exports', 'React', code);
               func(
-                  (p) => require(p, finalPath), 
+                  (p) => __require(p, finalPath), 
                   module, 
                   module.exports, 
                   window.React
@@ -448,7 +516,7 @@ export const constructMultiFileDocument = (rawFiles: ProjectFile[], projectId?: 
 
       window.addEventListener('DOMContentLoaded', () => {
           try {
-              require('src/main.tsx');
+              __require('src/main.tsx');
           } catch (e) {
               console.error('Bootstrap Error:', e);
               document.body.innerHTML = '<div style="color:#ef4444;padding:2rem;font-family:sans-serif;"><h3>Runtime Error</h3><p>Failed to execute application.</p><pre style="background:#1e293b;color:#e2e8f0;padding:1rem;border-radius:0.5rem;overflow:auto;">' + e.message + '</pre></div>';

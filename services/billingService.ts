@@ -1,5 +1,4 @@
 
-
 import { createClient } from '@supabase/supabase-js';
 import { webhookService } from './webhookService';
 
@@ -97,7 +96,8 @@ export const billingService = {
         });
 
         if (error) {
-            console.error("Billing Charge Failed:", error);
+            const errStr = error.message || JSON.stringify(error);
+            console.error(`Billing Charge Failed: ${errStr}`);
             return 0;
         }
         

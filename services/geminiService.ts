@@ -7,6 +7,7 @@ import { aiProviderService } from "./aiProviderService";
 import { openaiService } from "./openaiService";
 import { claudeService } from "./claudeService";
 import { sanitizeFileContent } from "../utils/codeGenerator"; // Import Sanitizer
+import { translations, Language } from '../utils/translations';
 
 // --- ENVIRONMENT & SAFETY ---
 const getEnv = (key: string) => {
@@ -434,6 +435,14 @@ Responsibilities:
 - **CRITICAL**: When the 'action' is 'update', you will be provided with 'existing_files' which includes the current content of the files. You MUST use this existing content as a basis and make only the **minimal necessary changes** to achieve the step's goal. Do not rewrite the entire file unless the change is fundamental and impacts the whole structure. The 'content' field for an 'update' action must be *the full, modified file content*.
 - Ensure: React mounts correctly, Something always renders.
 - Use Tailwind CSS and Lucide React.
+- **Strict Library Policy**: You may ONLY import from the following available libraries:
+  - 'react'
+  - 'react-dom'
+  - 'react-router-dom'
+  - 'lucide-react'
+  - 'clsx'
+  - 'tailwind-merge'
+- DO NOT use 'framer-motion', 'recharts', 'date-fns', 'react-icons', or any other external packages. If you need functionality from them, implement a simple version yourself using standard React/JS APIs.
 Forbidden: Architectural changes, Guessing entry points, Ignoring DESIGN.
 Input: Step (contains 'path'), Design, Current Files.
 Return STRICT JSON:
@@ -537,6 +546,7 @@ export class GenerationSupervisor {
     private images: string[];
     private callbacks: SupervisorCallbacks;
     private signal?: AbortSignal;
+    private lang: Language;
     
     // Context State
     private decision: DecisionJSON | null = null;
@@ -544,13 +554,14 @@ export class GenerationSupervisor {
     private filePlan: FilePlanJSON | null = null;
     private accumulatedFiles: ProjectFile[] = [];
 
-    constructor(project: Project, userPrompt: string, images: string[], callbacks: SupervisorCallbacks, signal?: AbortSignal) {
+    constructor(project: Project, userPrompt: string, images: string[], callbacks: SupervisorCallbacks, signal?: AbortSignal, lang: Language = 'en') {
         this.project = project;
         this.userPrompt = userPrompt;
         this.images = images;
         this.callbacks = callbacks;
         this.signal = signal;
         this.accumulatedFiles = project.files || [];
+        this.lang = lang;
     }
 
     private checkAbort() {
@@ -559,12 +570,24 @@ export class GenerationSupervisor {
         }
     }
 
+    private t(key: keyof typeof translations['en'], vars?: Record<string, string>) {
+        const dict = translations[this.lang] || translations['en'];
+        let str = (dict as any)[key] || key;
+        if (vars) {
+            Object.entries(vars).forEach(([k, v]) => {
+                str = str.replace(`{${k}}`, v ?? '');
+            });
+        }
+        return str;
+    }
+
     private async runStep(key: string, prompt: string, sysPromptDefault: string, logicalMessageKey: string): Promise<any> {
         this.checkAbort();
         
         let sys = await getSystemPrompt(key, sysPromptDefault);
 
-        const isFarsiPrompt = /[\u0600-\u06FF]/.test(this.userPrompt);
+        // Enforce Farsi response if user prompt has Farsi OR system language is set to Farsi
+        const isFarsiPrompt = /[\u0600-\u06FF]/.test(this.userPrompt) || this.lang === 'fa';
         
         if (isFarsiPrompt) {
             const langInstruction = "All user-facing text output in the JSON response (like summaries, explanations, messages, issues, hints, and step titles/descriptions) MUST be in Farsi.";
@@ -638,7 +661,7 @@ export class GenerationSupervisor {
             // 1. DECISION (Intent Classifier)
             currentMessageId = (await this.callbacks.onBuildMessage('decision', {
                 type: 'build_status',
-                content: "Analyzing your request and planning the best approach...",
+                content: this.t('analyzingRequest'),
                 status: 'working',
                 icon: 'loader'
             })).id;
@@ -650,7 +673,7 @@ export class GenerationSupervisor {
             await this.callbacks.onBuildMessage('decision', {
                 id: currentMessageId,
                 // Fix: Access narrative_summary property correctly
-                content: this.decision?.narrative_summary || "Finished analyzing your request.",
+                content: this.decision?.narrative_summary || this.t('finishedAnalysis'),
                 status: 'completed',
                 icon: 'check',
                 details: JSON.stringify(this.decision, null, 2),
@@ -662,7 +685,7 @@ export class GenerationSupervisor {
             // 2. REQUIREMENTS (Technical Needs)
             currentMessageId = (await this.callbacks.onBuildMessage('requirements', {
                 type: 'build_status',
-                content: "Checking for required backend services and data needs...",
+                content: this.t('checkingBackend'),
                 status: 'working',
                 icon: 'loader'
             })).id;
@@ -679,7 +702,7 @@ export class GenerationSupervisor {
                 if (!isCloudActive) {
                     await this.callbacks.onBuildMessage('backend_action_required', {
                         type: 'action_required',
-                        content: `**Backend Required:** This project needs a database. Please connect to Rafiei Cloud to proceed.`,
+                        content: this.t('backendActionRequired'),
                         requiresAction: 'CONNECT_DATABASE',
                         status: 'pending', // Waiting for user action
                         icon: 'warning',
@@ -690,7 +713,7 @@ export class GenerationSupervisor {
                 } else {
                      await this.callbacks.onBuildMessage('requirements', {
                         id: currentMessageId,
-                        content: "Backend requirements analyzed and Rafiei Cloud is connected. Ready to proceed!",
+                        content: this.t('backendRequirementsMet'), // Renamed key usage
                         status: 'completed',
                         icon: 'check',
                         details: JSON.stringify(requirements, null, 2),
@@ -702,7 +725,7 @@ export class GenerationSupervisor {
             } else if (needsBackend && userSkippedBackend) {
                  await this.callbacks.onBuildMessage('requirements', {
                     id: currentMessageId,
-                    content: "Backend required but skipped by user. Proceeding with frontend-only implementation using mock data.",
+                    content: this.t('backendSkipped'),
                     status: 'completed',
                     icon: 'check',
                     details: JSON.stringify(requirements, null, 2),
@@ -713,7 +736,7 @@ export class GenerationSupervisor {
             } else {
                  await this.callbacks.onBuildMessage('requirements', {
                     id: currentMessageId,
-                    content: "No backend services or database needed. Proceeding with frontend-only build.",
+                    content: this.t('noBackendNeeded'),
                     status: 'completed',
                     icon: 'check',
                     details: JSON.stringify(requirements, null, 2),
@@ -726,7 +749,7 @@ export class GenerationSupervisor {
             // 3. PHASE PLANNER (Build Order)
             currentMessageId = (await this.callbacks.onBuildMessage('phase_planner', {
                 type: 'build_plan',
-                content: "Creating a detailed build plan to ensure a smooth development process...",
+                content: this.t('creatingBuildPlan'),
                 status: 'working',
                 icon: 'loader'
             })).id;
@@ -747,7 +770,7 @@ export class GenerationSupervisor {
 
             await this.callbacks.onBuildMessage('phase_planner', {
                 id: currentMessageId,
-                content: "Here's the plan I've put together. I'll tackle this in phases, building piece by piece.",
+                content: this.t('planReady'),
                 planData: phases.map(p => ({title: p.title, status: 'pending'})),
                 status: 'completed',
                 icon: 'check',
@@ -761,11 +784,11 @@ export class GenerationSupervisor {
             // 4. DESIGN (UI/UX)
             currentMessageId = (await this.callbacks.onBuildMessage('design_phase', {
                 type: 'build_phase',
-                content: "Starting the design phase: I'm crafting a beautiful and intuitive UI/UX for your app...",
+                content: this.t('startingDesign'),
                 status: 'working',
                 icon: 'loader',
                 // Fix: Changed 'progress' to 'currentStepProgress'
-                currentStepProgress: { current: 0, total: 1, stepName: "Generating design specification" }
+                currentStepProgress: { current: 0, total: 1, stepName: this.t('generatingDesignSpec') }
             })).id;
 
             const designResult = await this.runStep(PROMPT_KEYS['DESIGN'], JSON.stringify({ user_input: this.userPrompt, decision: this.decision, phases: phasePlan }), DEFAULTS.DESIGN, currentMessageId);
@@ -773,11 +796,11 @@ export class GenerationSupervisor {
             
             await this.callbacks.onBuildMessage('design_phase', {
                 id: currentMessageId,
-                content: "Design phase completed! Your app will have a modern, clean, and elegant aesthetic. Moving on to building the components.",
+                content: this.t('designComplete'),
                 status: 'completed',
                 icon: 'check',
                 // Fix: Changed 'progress' to 'currentStepProgress'
-                currentStepProgress: { current: 1, total: 1, stepName: "Design specification complete" },
+                currentStepProgress: { current: 1, total: 1, stepName: this.t('designSpecComplete') },
                 details: JSON.stringify(this.design, null, 2),
                 isExpandable: true,
                 executionTimeMs: designResult.executionTime,
@@ -792,11 +815,11 @@ export class GenerationSupervisor {
                 const phaseMessageKey = `phase_${phase.id}`;
                 currentMessageId = (await this.callbacks.onBuildMessage(phaseMessageKey, {
                     type: 'build_phase',
-                    content: `Starting phase: **${phase.title}**. I'm planning the technical steps for this part of your app.`,
+                    content: this.t('startingPhase', { phaseTitle: phase.title }),
                     status: 'working',
                     icon: 'loader',
                     // Fix: Changed 'progress' to 'currentStepProgress'
-                    currentStepProgress: { current: 0, total: 1, stepName: "Planning phase steps" }
+                    currentStepProgress: { current: 0, total: 1, stepName: this.t('planningSteps') }
                 })).id;
                 
                 // PLANNER (acting as FILE_PLAN source of truth)
@@ -812,9 +835,9 @@ export class GenerationSupervisor {
                 
                 await this.callbacks.onBuildMessage(phaseMessageKey, {
                     id: currentMessageId,
-                    content: `Planned steps for **${phase.title}**. Now, I'm building the actual code for this phase.`,
+                    content: this.t('plannedSteps', { phaseTitle: phase.title }),
                     // Fix: Changed 'progress' to 'currentStepProgress'
-                    currentStepProgress: { current: 0, total: steps.length, stepName: "Executing build steps" },
+                    currentStepProgress: { current: 0, total: steps.length, stepName: this.t('executingSteps') },
                     details: JSON.stringify(detailedPlan, null, 2),
                     isExpandable: true,
                 });
@@ -836,7 +859,7 @@ export class GenerationSupervisor {
                     completedStepsInPhase++;
                     await this.callbacks.onBuildMessage(phaseMessageKey, {
                         id: currentMessageId,
-                        content: `Building **${phase.title}**: Implementing \`${filePath}\`.`,
+                        content: this.t('buildingPhase', { phaseTitle: phase.title, filePath: filePath }),
                         // Fix: Changed 'progress' to 'currentStepProgress'
                         currentStepProgress: { current: completedStepsInPhase, total: steps.length, stepName: step.title },
                     });
@@ -901,11 +924,11 @@ export class GenerationSupervisor {
 
                 await this.callbacks.onBuildMessage(phaseMessageKey, {
                     id: currentMessageId,
-                    content: `Phase **${phase.title}** completed! All components and logic for this section are in place.`,
+                    content: this.t('phaseComplete', { phaseTitle: phase.title }),
                     status: 'completed',
                     icon: 'check',
                     // Fix: Changed 'progress' to 'currentStepProgress'
-                    currentStepProgress: { current: steps.length, total: steps.length, stepName: "All steps complete" },
+                    currentStepProgress: { current: steps.length, total: steps.length, stepName: this.t('allStepsComplete') },
                     // Fix: Use accumulated phase metrics
                     executionTimeMs: phaseExecutionTimeMs,
                     creditsUsed: phaseCreditsUsed,
@@ -920,7 +943,7 @@ export class GenerationSupervisor {
             if (shouldBlockForBackend) {
                 currentMessageId = (await this.callbacks.onBuildMessage('sql_generation', {
                     type: 'build_status',
-                    content: "Generating database schema and SQL migrations based on your requirements...",
+                    content: this.t('generatingSchema'),
                     status: 'working',
                     icon: 'loader'
                 })).id;
@@ -942,7 +965,7 @@ export class GenerationSupervisor {
                 }
                 await this.callbacks.onBuildMessage('sql_generation', {
                     id: currentMessageId,
-                    content: "Database schema generated and saved to `supabase/schema.sql`. Ready for deployment!",
+                    content: this.t('schemaGenerated'),
                     status: 'completed',
                     icon: 'check',
                     details: JSON.stringify(sqlRes, null, 2),
@@ -958,7 +981,7 @@ export class GenerationSupervisor {
             // 7. QA & REPAIR (Final Validation)
             currentMessageId = (await this.callbacks.onBuildMessage('qa_validation', {
                 type: 'build_status',
-                content: "Performing final quality assurance and checking for any potential issues...",
+                content: this.t('performingQA'),
                 status: 'working',
                 icon: 'loader'
             })).id;
@@ -969,7 +992,7 @@ export class GenerationSupervisor {
             if (qaRes.status === 'fail' && qaRes.patches) {
                 await this.callbacks.onBuildMessage('qa_validation', {
                     id: currentMessageId,
-                    content: `QA detected some issues. Automatically applying repairs: ${qaRes.narrative || 'Fixing minor code inconsistencies.'}`,
+                    content: this.t('qaDetectedIssues', { narrative: qaRes.narrative || 'Fixing minor code inconsistencies.' }),
                     status: 'working',
                     icon: 'wrench',
                     details: JSON.stringify(qaRes, null, 2),
@@ -1002,7 +1025,7 @@ export class GenerationSupervisor {
                 }
                  await this.callbacks.onBuildMessage('qa_validation', {
                     id: currentMessageId,
-                    content: `Repairs applied. ${repairRes.narrative || 'Your code has been optimized and is now stable.'}`,
+                    content: this.t('repairsApplied', { narrative: repairRes.narrative || 'Your code has been optimized and is now stable.' }),
                     status: 'completed',
                     icon: 'check',
                     details: JSON.stringify(repairRes, null, 2),
@@ -1013,7 +1036,7 @@ export class GenerationSupervisor {
             } else {
                  await this.callbacks.onBuildMessage('qa_validation', {
                     id: currentMessageId,
-                    content: qaRes.narrative || "Final quality assurance passed with no issues detected. Your app looks great!",
+                    content: this.t('qaPassed'),
                     status: 'completed',
                     icon: 'check',
                     details: JSON.stringify(qaRes, null, 2),
@@ -1026,14 +1049,15 @@ export class GenerationSupervisor {
             // 8. SUCCESS (Dynamic Narrator)
             // Instead of using a hardcoded static summary, we generate a personalized one based on what was actually built.
             
-            const isFarsiPrompt = /[\u0600-\u06FF]/.test(this.userPrompt);
-            const pageNames = this.design?.pages?.map(p => p.name).join(', ') || (isFarsiPrompt ? 'صفحه اصلی' : 'Main Page');
-            const style = this.design?.design_language?.style || (isFarsiPrompt ? 'مدرن' : 'Modern');
+            // Check again to ensure success message respects language
+            const isFarsiSuccess = /[\u0600-\u06FF]/.test(this.userPrompt) || this.lang === 'fa';
+            const pageNames = this.design?.pages?.map(p => p.name).join(', ') || (isFarsiSuccess ? 'صفحه اصلی' : 'Main Page');
+            const style = this.design?.design_language?.style || (isFarsiSuccess ? 'مدرن' : 'Modern');
             const fileCount = this.accumulatedFiles.length;
 
             let successMessage = '';
 
-            if (isFarsiPrompt) {
+            if (isFarsiSuccess) {
                 successMessage = `🎉 **ساخت پروژه کامل شد!**\n\nمن ساخت برنامه شما را بر اساس طراحی "${style}" به پایان رساندم.\n\n**آنچه ساخته شد:**\n• **صفحات:** ${pageNames}\n• **تعداد فایل‌ها:** ${fileCount}\n• **فناوری‌ها:** React, Tailwind CSS, Lucide Icons\n\nهم‌اکنون می‌توانید پیش‌نمایش را مشاهده کنید و با برنامه تعامل داشته باشید!`;
             } else {
                 successMessage = `🎉 **Build Complete!**\n\nI've finished building your app based on the "${style}" design.\n\n**What's included:**\n• **Pages:** ${pageNames}\n• **Files Generated:** ${fileCount}\n• **Tech Stack:** React, Tailwind CSS, Lucide Icons\n\nYou can now preview the app on the right. Try interacting with it! If you need any changes, just ask.`;
@@ -1053,7 +1077,7 @@ export class GenerationSupervisor {
                 // Or ensure a new 'build_error' is sent for the abortion
                 await this.callbacks.onBuildMessage('build_abortion_notification', {
                     type: 'build_status',
-                    content: "Build process aborted by user.",
+                    content: this.t('buildAborted'),
                     status: 'failed',
                     icon: 'x'
                 });
