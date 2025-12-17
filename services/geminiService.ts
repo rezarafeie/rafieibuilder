@@ -58,7 +58,7 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
         const ai = new GoogleGenAI({ apiKey: config.apiKey });
         const reqConfig: any = { 
             systemInstruction, 
-            temperature: 0.2,
+            temperature: 0.1, // Lower temperature for more stable JSON
             maxOutputTokens: 8192 
         };
         
@@ -136,29 +136,66 @@ const robustGenerate = async (prompt: string, systemInstruction: string, project
 };
 
 /**
- * REFINED RECURSIVE JSON EXTRACTOR
+ * Stage-3 Resilience: Repairs unescaped characters in JSON strings (Gemini common error)
+ */
+const remedyJson = (s: string): string => {
+    return s
+        // 1. Fix unescaped newlines inside JSON string values
+        .replace(/(?<=[:[,])\s*"(?:[^"\\]|\\.)*"/g, (match) => {
+            return match.replace(/\n/g, "\\n").replace(/\r/g, "\\r");
+        })
+        // 2. Remove trailing commas in objects/arrays
+        .replace(/,\s*([\]}])/g, '$1')
+        // 3. Fix unescaped single quotes in what should be double-quoted values (risky but often needed)
+        .replace(/\\'/g, "'");
+};
+
+/**
+ * ADVANCED RECURSIVE JSON EXTRACTOR
+ * Specifically tuned for Gemini 3 to ignore thinking blocks and conversational noise.
  */
 const extractJson = (text: string | undefined): any => {
     if (!text) throw new Error("Empty response from AI");
-    try { return JSON.parse(text.trim()); } catch (e) {}
+    
+    // 1. Pre-clean
     let cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
-    try { return JSON.parse(cleaned); } catch (e) {}
-    const findAndParse = (str: string): any => {
-        const firstBrace = str.indexOf('{');
-        const firstBracket = str.indexOf('[');
-        const start = (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) ? firstBrace : firstBracket;
-        const lastBrace = str.lastIndexOf('}');
-        const lastBracket = str.lastIndexOf(']');
-        const end = (lastBrace !== -1 && (lastBracket === -1 || lastBrace > lastBracket)) ? lastBrace : lastBracket;
-        if (start === -1 || end === -1 || end <= start) return null;
-        const candidate = str.substring(start, end + 1);
-        try { return JSON.parse(candidate); } catch (e) {
-            if (str.length > start + 1) return findAndParse(str.substring(start + 1));
-            return null;
+
+    const tryParse = (str: string) => {
+        try { return JSON.parse(str); } catch (e) {
+            try { return JSON.parse(remedyJson(str)); } catch (e2) { return null; }
         }
     };
-    const result = findAndParse(cleaned);
-    if (result) return result;
+
+    // 2. Direct try
+    let res = tryParse(cleaned);
+    if (res) return res;
+
+    // 3. Pattern search (Enclosed blocks)
+    // We search for all potential JSON blocks and try parsing them from the end (usually the result)
+    const blocks = cleaned.match(/\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}|\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]/g);
+    
+    if (blocks) {
+        // AI usually puts the target JSON at the end if it was talking/thinking first
+        for (let i = blocks.length - 1; i >= 0; i--) {
+            res = tryParse(blocks[i]);
+            if (res) return res;
+        }
+    }
+
+    // 4. Fallback: Greediest possible search
+    const firstBrace = cleaned.indexOf('{');
+    const firstBracket = cleaned.indexOf('[');
+    const start = (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) ? firstBrace : firstBracket;
+    const lastBrace = cleaned.lastIndexOf('}');
+    const lastBracket = cleaned.lastIndexOf(']');
+    const end = (lastBrace !== -1 && (lastBracket === -1 || lastBrace > lastBracket)) ? lastBrace : lastBracket;
+
+    if (start !== -1 && end !== -1 && end > start) {
+        res = tryParse(cleaned.substring(start, end + 1));
+        if (res) return res;
+    }
+
+    console.error("CRITICAL_JSON_FAIL. Raw Input:", text);
     throw new Error("Failed to parse JSON response.");
 };
 
@@ -181,31 +218,29 @@ export const PROMPT_KEYS = {
 export const DEFAULTS = {
     DECISION: `Role: Strategic Intent Router.
 Intents: "chat", "config", "repair", "update" (incremental change), "new_build" (fresh start).
-Rule: If is_resume=true and files exist, default to "update" logic.
+Rule: If is_resume=true and files exist, you MUST use "update".
 Return STRICT JSON: {"analysis": {"intent": "...", "complexity": "..."}, "narrative_summary": "...", "response_message": "..."}`,
 
     REQUIREMENTS: `Role: Technical Needs Analyzer. Return JSON: {"needs_backend": boolean, "reasoning": "..."}`,
 
     PHASE_PLANNER: `Role: Build Workflow Architect.
-INCREMENTAL RULE: You MUST check the "existing_files" and "file_summary". 
-If a feature (e.g. Hero, Gallery) is already implemented in the code, DO NOT create a phase for it. 
-Only create phases for NEW or MODIFIED features requested by the user.
+INCREMENTAL RULE: Examine "file_summary" carefully. 
+If the user wants "Social Proof" and you see "Hero" and "Benefits" already exist, ONLY create a phase for "Social Proof".
+DO NOT rebuild what is already there.
 Return STRICT JSON: {"phases": [{"id": "...", "title": "...", "goal": "...", "type": "..."}]}`,
 
     DESIGN: `Role: UI/UX Designer. Generate spec for project.`,
 
     PLANNER: `Role: Technical Planner. 
-Goal: Provide instructions for the current phase.
-Rule: Look at the current content of the files. Do not suggest overwriting everything. 
-Suggest appending components or inserting logic into existing containers.
+Goal: Phase-specific instructions.
+Rule: Do not overwrite. Suggest precise insertion points.
 Return JSON: {"steps": [{"id": "...", "title": "...", "path": "...", "description": "..."}]}`,
 
-    BUILDER: `Role: React/Tailwind Code Generator.
-STRICT RULE: You are building INCREMENTALLY. 
-You will be provided with the "existing_content" of the file. 
-You MUST PRESERVE all existing sections (e.g. Hero, Story, etc.) unless specifically asked to delete them. 
-Integrate the new feature into the existing React structure seamlessly.
-Return FULL file content in JSON: {"file_changes": [{"path": "...", "content": "..."}]}`,
+    BUILDER: `Role: Incremental React/Tailwind Developer.
+STRICT RULE: The user is CONTINUING a build. 
+You are given "existing_content". You MUST NOT delete any existing functional sections (Hero, Benefits, etc.) unless specifically asked.
+Append or Insert the new logic. Return the FULL updated file source code.
+Return JSON: {"file_changes": [{"path": "...", "content": "..."}]}`,
 
     REPAIR_PLANNER: `Role: Senior Debugger. Provide patches.`,
     QA: `Role: Quality Assurance.`,
@@ -261,8 +296,8 @@ export class GenerationSupervisor {
     private getFileSummary() {
         return this.accumulatedFiles.map(f => {
             const lines = f.content.split('\n');
-            const components = lines.filter(l => l.includes('export default function') || l.includes('const ') && l.includes('= (')).map(l => l.trim());
-            return `File: ${f.path}, Components detected: ${components.join(', ')}`;
+            const components = lines.filter(l => (l.includes('export default function') || (l.includes('const ') && l.includes('= ('))) && l.length < 100).map(l => l.trim());
+            return `File: ${f.path}, Sections found: ${components.join(', ')}`;
         }).join('\n');
     }
 
@@ -319,7 +354,7 @@ export class GenerationSupervisor {
             this.checkAbort();
             
             // 1. DECISION
-            const decisionMsgId = (await this.callbacks.onBuildMessage('decision', { type: 'build_status', content: this.t('analyzingRequest'), status: 'working', icon: 'loader' })).id;
+            const decisionMsgId = (await this.callbacks.onBuildMessage('decision', { type: 'build_status', content: "thinking ....", status: 'working', icon: 'loader' })).id;
             const existingPaths = this.accumulatedFiles.map(f => f.path).join(', ');
             const fileSummary = this.getFileSummary();
 
@@ -348,7 +383,7 @@ export class GenerationSupervisor {
             await this.callbacks.onBuildMessage('decision', { id: decisionMsgId, content: decision.narrative_summary, status: 'completed', icon: 'check' });
 
             // 2. REQUIREMENTS
-            const reqMsgId = (await this.callbacks.onBuildMessage('requirements', { type: 'build_status', content: this.t('checkingBackend'), status: 'working', icon: 'loader' })).id;
+            const reqMsgId = (await this.callbacks.onBuildMessage('requirements', { type: 'build_status', content: "thinking ....", status: 'working', icon: 'loader' })).id;
             const requirementsResult = await this.runStep(PROMPT_KEYS['REQUIREMENTS'], JSON.stringify({ request: this.userPrompt, intent, analysis: decision }), DEFAULTS.REQUIREMENTS, reqMsgId);
             const requirements = requirementsResult.json;
 
@@ -387,7 +422,7 @@ export class GenerationSupervisor {
                 const phaseMsgId = (await this.callbacks.onBuildMessage(`phase_${phase.id}`, { type: 'build_phase', content: "thinking ....", status: 'working', icon: 'loader' })).id;
                 await this.callbacks.onPhaseStart(i, { text: phase.title });
                 
-                const detailedPlan = await this.runStep(PROMPT_KEYS['PLANNER'], JSON.stringify({ phase, user_request: this.userPrompt, existing_files: this.accumulatedFiles.map(f => ({ path: f.path, summary: f.content.substring(0, 500) })) }), DEFAULTS.PLANNER, phaseMsgId);
+                const detailedPlan = await this.runStep(PROMPT_KEYS['PLANNER'], JSON.stringify({ phase, user_request: this.userPrompt, existing_files: this.accumulatedFiles.map(f => ({ path: f.path, summary: f.content.substring(0, 1000) })) }), DEFAULTS.PLANNER, phaseMsgId);
                 const steps = detailedPlan.json.steps || [];
 
                 for (let j = 0; j < steps.length; j++) {
@@ -400,7 +435,7 @@ export class GenerationSupervisor {
                         task: step.description, 
                         file_path: step.path, 
                         existing_content: targetFile?.content || "",
-                        other_files: this.accumulatedFiles.filter(f => f.path !== step.path).map(f => f.path)
+                        other_files_summary: fileSummary
                     }), DEFAULTS.BUILDER, phaseMsgId);
                     
                     if (codeRes.json.file_changes) {
@@ -421,8 +456,7 @@ export class GenerationSupervisor {
                 await this.callbacks.onBuildMessage(`phase_${phase.id}`, { id: phaseMsgId, content: "thinking ....", status: 'completed', icon: 'check' });
             }
 
-            const isFarsi = /[\u0600-\u06FF]/.test(this.userPrompt) || this.lang === 'fa';
-            const successMsg = isFarsi ? "🎉 ساخت و بروزرسانی با موفقیت انجام شد!" : "🎉 Build and updates completed successfully!";
+            const successMsg = this.lang === 'fa' ? "🎉 ساخت و بروزرسانی با موفقیت انجام شد!" : "🎉 Build and updates completed successfully!";
             await this.callbacks.onSuccess({ html: '', javascript: '', css: '', explanation: 'Success' }, successMsg, { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
 
         } catch (e: any) {
