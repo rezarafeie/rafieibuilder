@@ -647,8 +647,17 @@ export class GenerationSupervisor {
         }
         
         const MAX_RETRIES = 3;
-        const isDesignStep = key === PROMPT_KEYS['DESIGN'];
-        const STEP_TIMEOUT_MS = isDesignStep ? 120000 : 60000; // 2 minutes for DESIGN, 60s for others.
+        
+        // Extended timeout steps
+        const longRunningSteps = [
+            PROMPT_KEYS['DESIGN'],
+            PROMPT_KEYS['BUILDER'],
+            PROMPT_KEYS['REPAIR'],
+            PROMPT_KEYS['REPAIR_PLANNER'],
+            PROMPT_KEYS['QA']
+        ];
+        const isLongRunning = longRunningSteps.includes(key);
+        const STEP_TIMEOUT_MS = isLongRunning ? 180000 : 60000; // 3 minutes for heavy tasks, 60s for others.
 
         let lastError;
         let startTime = Date.now();

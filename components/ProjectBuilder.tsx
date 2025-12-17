@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Project, Message, ViewMode, User, Suggestion, BuildState, VercelConfig } from '../types';
@@ -198,12 +199,20 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
   // SAFETY WATCHDOG
   useEffect(() => {
-      // This watchdog prevents the build from getting stuck in the initial analysis phase.
-      // The condition checks if the build is running but no build 'phases' have been created yet.
-      if (isBuilding && buildState && (!buildState.phases || buildState.phases.length === 0)) {
+      // This watchdog prevents the build from getting stuck in the INITIAL analysis phase.
+      // If the build has already progressed past phase 0 (Analysis), we disable this check
+      // to prevent false positives during complex, long-running build steps.
+      
+      const isPastAnalysis = buildState && (
+          (buildState.phases && buildState.phases.length > 0) || 
+          (buildState.currentPhaseIndex !== undefined && buildState.currentPhaseIndex > 0) || 
+          (buildState.currentStep !== undefined && buildState.currentStep > 0)
+      );
+
+      if (isBuilding && buildState && !isPastAnalysis) {
           if (watchdogRef.current) clearTimeout(watchdogRef.current);
           watchdogRef.current = setTimeout(() => {
-              console.warn("Watchdog triggered: Stuck in analysis phase. Forcing restart...");
+              console.warn("Watchdog triggered: Stuck in initial analysis phase. Forcing restart...");
               if (project) {
                   const errorMsg: Message = {
                       id: crypto.randomUUID(),
@@ -222,13 +231,13 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                       handleSendMessage(lastUserMsg.content || '', [], updated, true);
                   }
               }
-          }, 240000); // 4-minute timeout
+          }, 1200000); // 20-minute timeout for INITIAL analysis only
       } else {
-          // If a plan exists or the build isn't running, clear any existing timeout.
+          // If we have passed analysis or aren't building, clear any pending timeout.
           if (watchdogRef.current) clearTimeout(watchdogRef.current);
       }
       return () => { if (watchdogRef.current) clearTimeout(watchdogRef.current); };
-  }, [isBuilding, buildState?.phases]); // Depend on the phases array itself.
+  }, [isBuilding, buildState?.phases?.length, buildState?.currentPhaseIndex, buildState?.currentStep]);
 
 
   useEffect(() => {
