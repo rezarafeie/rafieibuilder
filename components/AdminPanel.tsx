@@ -205,7 +205,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
             else if (view === 'settings') {
                 // Fix: Access PROMPT_KEYS values by using Object.values and casting to string[]
                 const promptKeys = Object.values(PROMPT_KEYS) as string[];
-                const { data: dbSettings } = await cloudService.getSystemSettings(promptKeys);
+                // @fix: getSystemSettings returns data directly, no need to destructure { data }
+                const dbSettings = await cloudService.getSystemSettings(promptKeys);
                 const dbPrompts: Record<string, string> = {};
                 if (dbSettings) dbSettings.forEach((s: any) => dbPrompts[s.key] = s.value);
                 const loadedPrompts: Record<string, string> = {};
@@ -218,7 +219,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                 setPrompts(loadedPrompts);
             }
 
-        } catch (e: any) { 
+        } catch (e: unknown) { 
             console.error("View load failed", e);
             const errorMessage = getErrorMessage(e);
             setDataError(errorMessage);
@@ -256,7 +257,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
             await aiProviderService.saveConfig({ id: config.id, isActive: !config.isActive });
             const configs = await aiProviderService.getAllConfigs();
             setAiConfigs(configs);
-        } catch(e: any) {
+        } catch(e: unknown) {
             alert(getErrorMessage(e));
         }
     };
@@ -266,7 +267,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
             await aiProviderService.saveConfig({ id: config.id, isFallback: !config.isFallback });
             const configs = await aiProviderService.getAllConfigs();
             setAiConfigs(configs);
-        } catch(e: any) {
+        } catch(e: unknown) {
             alert(getErrorMessage(e));
         }
     };
@@ -276,7 +277,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
             await aiProviderService.saveConfig({ id, model });
             const configs = await aiProviderService.getAllConfigs();
             setAiConfigs(configs);
-        } catch(e: any) {
+        } catch(e: unknown) {
             alert(getErrorMessage(e));
         }
     };
@@ -290,7 +291,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
             const configs = await aiProviderService.getAllConfigs();
             setAiConfigs(configs);
             alert("API Key updated securely.");
-        } catch(e: any) {
+        } catch(e: unknown) {
             const msg = getErrorMessage(e);
             alert(msg);
         }
@@ -306,7 +307,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
             await billingService.updateProfitMargin(val);
             alert("Margin updated");
             loadViewData();
-        } catch (e: any) {
+        } catch (e: unknown) {
             const msg = getErrorMessage(e);
             alert(msg);
         }
@@ -319,7 +320,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
             const transactions = await cloudService.getUserTransactions(u.id);
             setSelectedUserFinancials(financials);
             setSelectedUserTransactions(transactions);
-        } catch(e: any) { 
+        } catch(e: unknown) { 
             console.error(getErrorMessage(e)); 
             setSelectedUserFinancials(null); 
             setSelectedUserTransactions([]); 
@@ -338,7 +339,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                 alert("User not found");
                 setTargetUser(null);
             }
-        } catch (e: any) {
+        } catch (e: unknown) {
             alert(`Search failed: ${getErrorMessage(e)}`);
         } finally {
             setIsLoading(false);
@@ -377,7 +378,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                 if (refreshed.length > 0) setTargetUser(refreshed[0]);
             }
 
-        } catch(e: any) {
+        } catch(e: unknown) {
             console.error("Adjustment Failed:", e);
             alert(`Failed: ${getErrorMessage(e)}`);
         } finally {
@@ -395,7 +396,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
             });
             await Promise.all(updates);
             alert("All system prompts saved globally.");
-        } catch (e: any) {
+        } catch (e: unknown) {
             alert(`Failed to save prompts: ${getErrorMessage(e)}`);
         } finally {
             setIsSavingPrompts(false);
@@ -410,8 +411,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
             const defaultVal = (DEFAULTS as Record<string, string>)[key] || '';
             setPrompts(prev => ({ ...prev, [key]: defaultVal }));
             alert("Reset to default (Global override removed).");
-        } catch(e) {
-            // @fix: Remove ': any' from catch to use 'unknown' type, aligning with getErrorMessage.
+        } catch(e: unknown) {
             alert(`Failed to reset: ${getErrorMessage(e)}`);
         }
     };
@@ -433,7 +433,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
             });
             setPrompts(defaultPrompts);
             alert("All prompts reset to code defaults.");
-        } catch(e: any) {
+        } catch (e: unknown) {
             alert(`Failed to reset all: ${getErrorMessage(e)}`);
         } finally {
             setIsSavingPrompts(false);
@@ -447,7 +447,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
             await cloudService.setSystemSetting('webhook_url', webhookUrl);
             webhookService.clearCache(); // Force refresh in service
             alert("Webhook URL updated.");
-        } catch(e: any) {
+        } catch(e: unknown) {
             alert(getErrorMessage(e));
         }
         finally { setIsSavingUrl(false); }

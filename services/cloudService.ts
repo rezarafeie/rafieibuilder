@@ -1,6 +1,3 @@
-
-
-
 // ... existing imports
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { User, Project, RafieiCloudProject, ProjectFile, Domain, CreditLedgerEntry, FinancialStats, WebhookLog, SystemLog, CreditTransaction, AdminMetric, BuildState, BuildAudit, GeneratedCode, Message } from '../types';
@@ -302,7 +299,8 @@ export const cloudService = {
             status: project.status,
             published_url: project.publishedUrl,
             custom_domain: project.customDomain,
-            rafiei_cloud_project: project.rafieiCloudProject,
+            // @fix: Changed 'project.rafiei_cloud_project' to 'project.rafieiCloudProject' to match interface
+            rafiei_cloud_project: project.rafieiCloudProject, // Fix snake_case for DB
             vercel_config: project.vercelConfig,
             deleted_at: project.deletedAt ? new Date(project.deletedAt).toISOString() : null
         };
@@ -604,7 +602,8 @@ export const cloudService = {
         project: Project, 
         prompt: string, 
         images: { url: string; base64: string }[], 
-        onUpdate: (p: Project, meta?: any) => void
+        onUpdate: (p: Project, meta?: any) => void,
+        isResume: boolean = false
     ) {
         if (this.abortController) {
             this.abortController.abort();
@@ -703,7 +702,7 @@ export const cloudService = {
             lang
         );
 
-        supervisor.start().catch(console.error);
+        supervisor.start(isResume).catch(console.error);
     },
 
     async triggerRepair(
@@ -1133,6 +1132,7 @@ export const cloudService = {
             buildState: p.build_state || null,
             publishedUrl: p.published_url,
             customDomain: p.custom_domain,
+            // @fix: Changed 'rafiei_cloud_project' to 'rafieiCloudProject' to match interface
             rafieiCloudProject: p.rafiei_cloud_project ? {
                 id: p.rafiei_cloud_project.id,
                 userId: p.rafiei_cloud_project.user_id || p.rafiei_cloud_project.userId,
