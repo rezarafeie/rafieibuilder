@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Message, Suggestion, BuildState, User } from '../types';
-import { Send, Sparkles, Square, RefreshCw, Wrench, Lightbulb, Paperclip, X, Image as ImageIcon, Loader2, AlertTriangle, Cloud, Wand2, Copy, MoreHorizontal, Clock, Check, Coins, CheckCircle2, XCircle, FileCode, CheckSquare, Circle, Info, ArrowRight, Play } from 'lucide-react';
+import { Message, Suggestion, BuildState, User, AIDebugLog } from '../types';
+import { Send, Sparkles, Square, RefreshCw, Wrench, Lightbulb, Paperclip, X, Image as ImageIcon, Loader2, AlertTriangle, Cloud, Wand2, Copy, MoreHorizontal, Clock, Check, Coins, CheckCircle2, XCircle, FileCode, CheckSquare, Circle, Info, ArrowRight, Play, Bug } from 'lucide-react';
 import CloudConnectionTerminal from './CloudConnectionTerminal';
 import { useTranslation } from '../utils/translations';
 import { fileToBase64 } from '../services/cloudService';
@@ -17,7 +17,7 @@ interface ImageUpload {
 }
 
 interface ChatInterfaceProps {
-  user: User; // Added user prop
+  user: User;
   messages: Message[];
   onSendMessage: (content: string, images: { url: string; base64: string }[]) => void;
   onUploadImage?: (file: File) => Promise<string>;
@@ -38,6 +38,7 @@ interface ChatInterfaceProps {
   cloudConnectionError?: string | null;
   onCloudConnectRetry?: () => void;
   onClearCloudConnectionState?: () => void;
+  onViewTrace?: (interactions: AIDebugLog[]) => void;
 }
 
 const SUCCESS_SOUND_URL = 'https://cdn.pixabay.com/audio/2022/03/15/audio_2b28b1e36c.mp3';
@@ -75,7 +76,7 @@ const formatCredits = (credits: number | undefined) => {
   return credits < 0.01 ? '< 0.01' : credits.toFixed(2);
 };
 
-const MessageActions: React.FC<{ msg: Message }> = ({ msg }) => {
+const MessageActions: React.FC<{ msg: Message, isAdmin: boolean, onViewTrace?: (logs: AIDebugLog[]) => void }> = ({ msg, isAdmin, onViewTrace }) => {
     const [copied, setCopied] = useState(false);
     const handleCopy = () => {
         if (msg.content) {
@@ -92,6 +93,15 @@ const MessageActions: React.FC<{ msg: Message }> = ({ msg }) => {
             <button onClick={handleCopy} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors" title="Copy">
                 {copied ? <Check size={12} className="text-emerald-500"/> : <Copy size={12}/>}
             </button>
+            {isAdmin && msg.aiInteractions && msg.aiInteractions.length > 0 && (
+                <button 
+                    onClick={() => onViewTrace?.(msg.aiInteractions || [])} 
+                    className="flex items-center gap-1 text-[10px] bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-500/20 hover:scale-105 transition-all"
+                    title="View AI Trace (Admin Only)"
+                >
+                    <Bug size={10} /> Trace ({msg.aiInteractions.length})
+                </button>
+            )}
             {(msg.executionTimeMs || msg.creditsUsed) && (
                 <div className="flex items-center gap-2 text-[10px] text-slate-400 select-none">
                     {msg.executionTimeMs && <span className="flex items-center gap-0.5"><Clock size={10}/> {formatTime(msg.executionTimeMs)}</span>}
@@ -227,6 +237,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     cloudConnectionError,
     onCloudConnectRetry,
     onClearCloudConnectionState,
+    onViewTrace
 }) => {
   const [input, setInput] = useState('');
   const [stagedImages, setStagedImages] = useState<ImageUpload[]>([]);
@@ -236,6 +247,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const wasThinkingRef = useRef(false);
   const { t, dir } = useTranslation();
+
+  const isAdmin = user.email === 'rezarafeie13@gmail.com';
 
   useEffect(() => {
     successSoundRef.current = new Audio(SUCCESS_SOUND_URL);
@@ -272,7 +285,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       for (const upload of newUploads) {
           try {
               const fullBase64 = await fileToBase64(upload.file);
-              // Use full Base64 Data URI to preserve Mime Type for AI Providers
               const pureBase64 = fullBase64; 
               let serverUrl = upload.previewUrl; 
               if (onUploadImage) serverUrl = await onUploadImage(upload.file);
@@ -308,8 +320,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const handleSuggestionClick = (prompt: string) => { setInput(prompt); document.getElementById('chat-input')?.focus(); };
 
   const isUploading = stagedImages.some(img => img.uploading);
-
-  // Check if we are waiting for the first assistant response
   const isWaitingForFirstResponse = isThinking && messages.length > 0 && messages[messages.length - 1].role === 'user';
 
   return (
@@ -329,7 +339,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             </div>
         )}
         
-        {/* Message Stream */}
         {messages.map((msg, idx) => {
             const isUserInput = msg.type === 'user_input';
             const isAssistantResponse = msg.type === 'assistant_response';
@@ -339,7 +348,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             return (
               <div key={msg.id} className={`flex gap-4 group animate-in fade-in slide-in-from-bottom-2 duration-300 ${isUserInput ? 'flex-row-reverse' : 'flex-row'}`}>
                  
-                 {/* Avatar */}
                  {!isBuildMessage && (
                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-1 overflow-hidden shadow-sm ${
                          isUserInput ? 'bg-slate-100 dark:bg-slate-800' : 'bg-indigo-50 dark:bg-indigo-900/10'
@@ -352,13 +360,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                      </div>
                  )}
 
-                 {/* Content Bubble */}
                  <div className={`max-w-[85%] text-sm ${
                      isUserInput 
                      ? 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 px-4 py-2.5 rounded-2xl rounded-tr-sm' 
                      : isAssistantResponse 
                         ? 'text-slate-700 dark:text-slate-300 pt-1'
-                        : 'w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 rounded-lg p-3' // Build messages style
+                        : 'w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 rounded-lg p-3'
                  }`}>
                      <ChatMessageContent 
                         msg={msg} 
@@ -369,13 +376,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         cloudConnectionStatus={cloudConnectionStatus} 
                         isLastMessage={isLastMessage}
                      />
-                     {!isBuildMessage && <MessageActions msg={msg} />}
+                     {!isBuildMessage && <MessageActions msg={msg} isAdmin={isAdmin} onViewTrace={onViewTrace} />}
                  </div>
               </div>
             );
         })}
 
-        {/* Transient Loading Indicator */}
         {isWaitingForFirstResponse && (
             <div className="flex gap-4 animate-in fade-in">
                 <div className="w-8 h-8 rounded-full bg-indigo-50 dark:bg-indigo-900/10 flex items-center justify-center shrink-0">
@@ -388,7 +394,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             </div>
         )}
 
-        {/* Incomplete Build Warning with Continue Button */}
         {isResumable && !isThinking && (
             <div className="flex gap-4 animate-in fade-in">
                 <div className="w-full bg-indigo-50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-800/50 rounded-xl p-4 flex flex-col items-center text-center">
@@ -422,7 +427,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         
         {!isThinking && (runtimeError || isAutoRepairing) && (
             <div className="flex gap-4 animate-in fade-in">
-                 <div className="w-8 h-8 shrink-0" /> {/* Spacer */}
+                 <div className="w-8 h-8 shrink-0" />
                 <div className="p-3 bg-red-50 dark:bg-red-900/10 border border-red-100 dark:border-red-900/20 rounded-lg text-xs max-w-[85%]">
                     <div className="flex items-center gap-2 font-medium text-red-600 dark:text-red-400 mb-1">
                         {isAutoRepairing ? <Wand2 size={14} className="animate-spin" /> : <AlertTriangle size={14} />}
@@ -443,7 +448,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Area */}
       <div className="p-4 sticky bottom-0 z-20 bg-gradient-to-t from-white via-white to-transparent dark:from-[#0f172a] dark:via-[#0f172a] dark:to-transparent">
         {isSuggestionsLoading && !isThinking && suggestions.length === 0 && (
             <div className="mb-2 flex items-center gap-2 px-2 text-xs text-slate-400 animate-pulse">
