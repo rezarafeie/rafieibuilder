@@ -317,16 +317,18 @@ Return STRICT JSON:
 }`,
 
     PHASE_PLANNER: `Role: Build Order Controller
-Purpose: Prevent unstable builds and white previews.
+Purpose: Prevent unstable builds and white previews by prioritizing a working skeleton.
 Responsibilities:
 - Break the project into safe, sequential phases.
-- Ensure all generated 'title' and 'goal' fields within the 'phases' array are **highly specific and customized** to the user's request. For Farsi prompts, these fields MUST be in Farsi.
+- **CRITICAL**: Phase 1 MUST be titled "Bootstrap Application Shell". Its ONLY goal is to create the essential 'index.html', 'src/main.tsx', 'src/App.tsx', and 'src/index.css' files. This ensures the preview iframe has valid content to render immediately.
 - Enforce UI-first rendering before logic/backend.
+- Ensure all generated 'title' and 'goal' fields within the 'phases' array are **highly specific and customized** to the user's request. For Farsi prompts, these fields MUST be in Farsi.
 Forbidden: Writing code, Naming files, Designing components.
 Return STRICT JSON:
 {
   "phases": [
-    { "id": "p1", "title": "Phase 1: Build Responsive Navigation Bar", "goal": "Render routes and basic navigation", "type": "ui" }
+    { "id": "p1", "title": "Phase 1: Bootstrap Application Shell", "goal": "Setup React environment with index.html, main.tsx, and App.tsx to render a visible starting state immediately.", "type": "skeleton" },
+    { "id": "p2", "title": "Phase 2: Build Main UI Layout", "goal": "Implement the core layout wrapper and navigation.", "type": "ui" }
   ]}`,
 
     DESIGN: `Role: World-Class UI/UX Designer
@@ -407,6 +409,11 @@ Return STRICT JSON:
 Purpose: Prevent unstable builds and white previews. Decide what needs to be built and in what order.
 Responsibilities:
 - For each phase, break the work into safe, sequential steps.
+- **BOOTSTRAP RULE**: If this is Phase 1 (Bootstrap/Skeleton), you MUST plan the files in this EXACT order to ensure dependencies exist before they are imported:
+  1. \`index.html\` (The root shell)
+  2. \`src/index.css\` (Tailwind directives)
+  3. \`src/App.tsx\` (The main component, initially just a "Loading..." or simple scaffold)
+  4. \`src/main.tsx\` (The React entry point that imports App and mounts to index.html)
 - Ensure all generated 'title' and 'description' fields within the 'steps' array are **highly specific and customized** to the current step's goal. For Farsi prompts, these fields MUST be in Farsi.
 - Define explicit and unambiguous file paths for each step.
 - Reference DESIGN and PHASE_PLANNER outputs for context.
@@ -425,10 +432,26 @@ Return STRICT JSON:
     },
     {
       "id": "s2",
+      "path": "src/index.css",
+      "action": "create",
+      "title": "Setup global styles",
+      "description": "Create src/index.css with standard Tailwind directives.",
+      "outcome": "Global styles ready."
+    },
+    {
+      "id": "s3",
+      "path": "src/App.tsx",
+      "action": "create",
+      "title": "Create App component skeleton",
+      "description": "Create a simple src/App.tsx that renders a loading state or basic layout to prevent runtime errors.",
+      "outcome": "App component ready."
+    },
+    {
+      "id": "s4",
       "path": "src/main.tsx",
       "action": "create",
-      "title": "Set up React 18 entry point in main.tsx",
-      "description": "Create the main.tsx file to initialize React 18's createRoot and mount the primary App component.",
+      "title": "Set up React 18 entry point",
+      "description": "Create src/main.tsx to mount App.tsx into the DOM root.",
       "outcome": "React application successfully mounts to the DOM."
     }
   ]
@@ -657,7 +680,8 @@ export class GenerationSupervisor {
             PROMPT_KEYS['QA']
         ];
         const isLongRunning = longRunningSteps.includes(key);
-        const STEP_TIMEOUT_MS = isLongRunning ? 180000 : 60000; // 3 minutes for heavy tasks, 60s for others.
+        // Updated timeout logic: 2 mins default, 5 mins for heavy tasks
+        const STEP_TIMEOUT_MS = isLongRunning ? 300000 : 120000; 
 
         let lastError;
         let startTime = Date.now();
