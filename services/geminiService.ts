@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from '@supabase/supabase-js';
 import { GeneratedCode, Message, Suggestion, Project, Phase, BuildAudit, AIProviderConfig, AIUsageResult, DecisionJSON, DesignSpecJSON, FilePlanJSON, FileChange, QAJSON, ProjectFile, User } from "../types";
@@ -28,16 +27,58 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 // --- SYSTEM PROMPT MANAGEMENT ---
 const promptCache: Record<string, string> = {};
 
-const getSystemPrompt = async (key: string, defaultVal: string): Promise<string> => {
+// Fix: Moved PROMPT_KEYS up and added DEFAULTS export to resolve member error in AdminPanel.tsx
+export const PROMPT_KEYS = {
+    'CLASSIFIER': 'sys_prompt_classifier_v12',
+    'DECISION': 'sys_prompt_decision_v12', 
+    'REQUIREMENTS': 'sys_prompt_requirements_v12',
+    'PHASE_PLANNER': 'sys_prompt_phase_planner_v12', 
+    'DESIGN': 'sys_prompt_design_v12',
+    'PLANNER': 'sys_prompt_planner_v12', 
+    'BUILDER': 'sys_prompt_builder_v12', 
+    'REPAIR_PLANNER': 'sys_prompt_repair_planner_v12',
+    'TITLE': 'sys_prompt_title_v12'
+};
+
+// Fix: Added DEFAULTS export required by AdminPanel.tsx to provide reference system prompts in the UI
+export const DEFAULTS: Record<string, string> = {
+    'CLASSIFIER': 'You are an intent classifier. Categorize the user request into: chat, build, repair, or cloud_setup.',
+    'DECISION': 'You are a technical architect. Provide a narrative summary of the project and its complexity.',
+    'REQUIREMENTS': 'Analyze if the project needs a backend database or specialized storage.',
+    'PHASE_PLANNER': 'Create a high-level plan divided into logical phases (skeleton, ui, logic).',
+    'DESIGN': 'Generate a design specification including pages, routing, and component definitions.',
+    'PLANNER': 'Plan specific implementation steps for the current phase, including file paths.',
+    'BUILDER': 'You are a senior React developer. Output file changes based on the assigned task.',
+    'REPAIR_PLANNER': 'Analyze the provided error and files to propose a set of patches.',
+    'TITLE': 'Generate a short, creative project title in JSON format: {"title": "..."}'
+};
+
+/**
+ * STRICT DB FETCH: This method FORCES a query to Supabase.
+ * If the prompt key is missing from the database, the system will throw a critical error.
+ * No hardcoded fallbacks are allowed.
+ */
+const getSystemPrompt = async (key: string): Promise<string> => {
     if (promptCache[key]) return promptCache[key];
+    
     try {
-        const { data } = await supabase.from('system_settings').select('value').eq('key', key).maybeSingle();
+        const { data, error } = await supabase
+            .from('system_settings')
+            .select('value')
+            .eq('key', key)
+            .maybeSingle();
+            
+        if (error) throw error;
+        
         if (data?.value) {
             promptCache[key] = data.value;
             return data.value;
         }
-    } catch (e) {}
-    return defaultVal;
+    } catch (e) {
+        console.error(`CRITICAL: Prompt Fetch Error for [${key}]:`, e);
+    }
+    
+    throw new Error(`CRITICAL CONFIG ERROR: System prompt [${key}] is missing from the database. The builder cannot proceed without database instructions.`);
 };
 
 // --- ORCHESTRATOR UTILS ---
@@ -57,7 +98,7 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
     if (config.id === 'google') {
         const ai = new GoogleGenAI({ apiKey: config.apiKey });
         const reqConfig: any = { 
-            systemInstruction: "ACT AS A HEADLESS DATA API. RETURN ONLY VALID JSON. NO MARKDOWN. NO CONVERSATION. NO PREAMBLE. NO INSTRUCTIONS.\n\n" + systemInstruction, 
+            systemInstruction: systemInstruction, 
             temperature: 0.1, 
             maxOutputTokens: 8192 
         };
@@ -143,14 +184,7 @@ const extractJson = (text: string | undefined): any => {
     };
     let res = tryParse(cleaned);
     if (res) return res;
-    const startBrace = cleaned.indexOf('{');
-    const startBracket = cleaned.indexOf('[');
-    const start = (startBrace !== -1 && (startBracket === -1 || startBrace < startBracket)) ? startBrace : startBracket;
-    const end = Math.max(cleaned.lastIndexOf('}'), cleaned.lastIndexOf(']'));
-    if (start !== -1 && end !== -1 && end > start) {
-        res = tryParse(cleaned.substring(start, end + 1));
-        if (res) return res;
-    }
+    
     const blocks = cleaned.match(/\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}|\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]/g);
     if (blocks) {
         for (let i = blocks.length - 1; i >= 0; i--) {
@@ -158,51 +192,7 @@ const extractJson = (text: string | undefined): any => {
             if (res) return res;
         }
     }
-    throw new Error("AI returned invalid format. Please try again.");
-};
-
-export const PROMPT_KEYS = {
-    'CLASSIFIER': 'sys_prompt_classifier_v12',
-    'DECISION': 'sys_prompt_decision_v12', 
-    'REQUIREMENTS': 'sys_prompt_requirements_v12',
-    'PHASE_PLANNER': 'sys_prompt_phase_planner_v12', 
-    'DESIGN': 'sys_prompt_design_v12',
-    'PLANNER': 'sys_prompt_planner_v12', 
-    'BUILDER': 'sys_prompt_builder_v12', 
-    'REPAIR_PLANNER': 'sys_prompt_repair_planner_v12',
-    'TITLE': 'sys_prompt_title_v12'
-};
-
-export const DEFAULTS = {
-    CLASSIFIER: `Role: Technical Router. 
-Analyze the user message and existing files.
-Return ONLY JSON: {
-  "intent": "chat" | "build_new" | "update_existing" | "repair" | "cloud_setup",
-  "reasoning": "...",
-  "direct_response": "Friendly answer if intent is 'chat' or 'cloud_setup'..."
-}`,
-
-    DECISION: `Return ONLY JSON: {"analysis": {"intent": "new_build"|"update", "complexity": "low"|"med"|"high"}, "narrative_summary": "...", "response_message": "..."}`,
-
-    REQUIREMENTS: `Return ONLY JSON: {"needs_backend": boolean, "reasoning": "...", "features": []}`,
-
-    PHASE_PLANNER: `Role: React/Tailwind Architect. 
-Rule: NEVER plan CLI steps or 'npm install'. ONLY plan file creation milestones.
-Return ONLY JSON: {"phases": [{"title": "Shell", "goal": "Setup src/App.tsx", "type": "skeleton"}]}`,
-
-    DESIGN: `Return ONLY JSON: {"design_language": "modern", "pages": [], "visual_spec": "{}"}`,
-
-    PLANNER: `Role: Technical Lead. 
-Break the phase into specific file creation/update steps.
-Return ONLY JSON: {"steps": [{"title": "Update App.tsx", "path": "src/App.tsx", "description": "Apply requested changes"}]}`,
-
-    BUILDER: `Role: Expert React + Tailwind Developer. 
-Rule: Output the FULL FILE CONTENT. NO instructions. NO commentary. NO placeholders. NO 'npm install'.
-Return ONLY JSON: {"file_changes": [{"path": "src/App.tsx", "content": "import React from 'react';..."}]}`,
-
-    REPAIR_PLANNER: `Return ONLY JSON: {"patches": [{"path": "...", "content": "..."}], "explanation": "..."}`,
-
-    TITLE: `Return ONLY JSON: {"title": "App Name"}`
+    throw new Error("AI returned invalid JSON format. Prompt tuning required.");
 };
 
 export interface SupervisorCallbacks {
@@ -248,9 +238,10 @@ export class GenerationSupervisor {
         return str;
     }
 
-    private async runStep(key: string, prompt: string, sysPromptDefault: string, logicalMessageKey: string): Promise<any> {
+    private async runStep(key: string, prompt: string, logicalMessageKey: string): Promise<any> {
         this.checkAbort();
-        let sys = await getSystemPrompt(key, sysPromptDefault);
+        let sys = await getSystemPrompt(key);
+        
         const effectiveIsFarsi = this.lang === 'fa' || /[\u0600-\u06FF]/.test(this.userPrompt);
         if (effectiveIsFarsi) sys = "User-facing text in JSON MUST be in Farsi.\n" + sys;
 
@@ -271,9 +262,9 @@ export class GenerationSupervisor {
     }
 
     public async repair(error: string) {
-        const msgId = (await this.callbacks.onBuildMessage('repair', { type: 'build_status', content: "Applying automatic fix...", status: 'working', icon: 'wrench' })).id;
+        const msgId = (await this.callbacks.onBuildMessage('repair', { type: 'build_status', content: "Strategizing repair...", status: 'working', icon: 'wrench' })).id;
         try {
-            const res = await this.runStep(PROMPT_KEYS['REPAIR_PLANNER'], JSON.stringify({ error, files: this.accumulatedFiles.map(f=>({path: f.path, content: f.content.substring(0, 500)})) }), DEFAULTS.REPAIR_PLANNER, msgId);
+            const res = await this.runStep(PROMPT_KEYS['REPAIR_PLANNER'], JSON.stringify({ error, files: this.accumulatedFiles.map(f=>({path: f.path, content: f.content.substring(0, 500)})) }), msgId);
             if (res.json.patches) {
                 for (const patch of res.json.patches) {
                     const idx = this.accumulatedFiles.findIndex(f => f.path === patch.path);
@@ -281,7 +272,7 @@ export class GenerationSupervisor {
                     if (idx !== -1) this.accumulatedFiles[idx].content = content;
                     else this.accumulatedFiles.push({ path: patch.path, content, type: 'file' });
                 }
-                await this.callbacks.onChunkComplete({ html: '', javascript: '', css: '', explanation: res.json.explanation }, "Fixed issue", { files: this.accumulatedFiles });
+                await this.callbacks.onChunkComplete({ html: '', javascript: '', css: '', explanation: res.json.explanation }, "Applied fix", { files: this.accumulatedFiles });
             }
             await this.callbacks.onBuildMessage('repair', { id: msgId, status: 'completed', icon: 'check' });
             await this.callbacks.onSuccess(this.project.code, "Self-healing complete.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
@@ -294,9 +285,9 @@ export class GenerationSupervisor {
         try {
             this.checkAbort();
             
-            // 1. CLASSIFIER (Priority 1)
-            const classMsgId = (await this.callbacks.onBuildMessage('classifier', { type: 'build_status', content: "Categorizing request...", status: 'working', icon: 'loader' })).id;
-            const classRes = await this.runStep(PROMPT_KEYS['CLASSIFIER'], `USER: ${this.userPrompt}\nFILES: ${this.accumulatedFiles.map(f=>f.path).join(',')}`, DEFAULTS.CLASSIFIER, classMsgId);
+            // 1. CLASSIFIER (Priority 1 Router)
+            const classMsgId = (await this.callbacks.onBuildMessage('classifier', { type: 'build_status', content: "Classifying intent...", status: 'working', icon: 'loader' })).id;
+            const classRes = await this.runStep(PROMPT_KEYS['CLASSIFIER'], `USER: ${this.userPrompt}\nFILES: ${this.accumulatedFiles.map(f=>f.path).join(',')}`, classMsgId);
             const classification = classRes.json;
 
             if (classification.intent === 'chat') {
@@ -312,36 +303,36 @@ export class GenerationSupervisor {
             }
 
             if (classification.intent === 'cloud_setup') {
-                await this.callbacks.onBuildMessage('classifier', { id: classMsgId, type: 'action_required', content: classification.direct_response || "Cloud connection required.", requiresAction: 'CONNECT_DATABASE', status: 'pending', icon: 'cloud' });
-                await this.callbacks.onSuccess(this.project.code, "Cloud pending.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
+                await this.callbacks.onBuildMessage('classifier', { id: classMsgId, type: 'action_required', content: classification.direct_response || "Database setup requested.", requiresAction: 'CONNECT_DATABASE', status: 'pending', icon: 'cloud' });
+                await this.callbacks.onSuccess(this.project.code, "Cloud process pending.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
                 return;
             }
 
-            await this.callbacks.onBuildMessage('classifier', { id: classMsgId, content: "Request categorized.", status: 'completed', icon: 'check' });
+            await this.callbacks.onBuildMessage('classifier', { id: classMsgId, content: "Intent classified as: " + classification.intent, status: 'completed', icon: 'check' });
 
             // 2. DECISION & REQUIREMENTS
             const decisionMsgId = (await this.callbacks.onBuildMessage('decision', { type: 'build_status', content: this.t('analyzingRequest'), status: 'working', icon: 'loader' })).id;
-            const decisionRes = await this.runStep(PROMPT_KEYS['DECISION'], `PROMPT: ${this.userPrompt}`, DEFAULTS.DECISION, decisionMsgId);
+            const decisionRes = await this.runStep(PROMPT_KEYS['DECISION'], `PROMPT: ${this.userPrompt}`, decisionMsgId);
             const decision = decisionRes.json;
             await this.callbacks.onBuildMessage('decision', { id: decisionMsgId, content: decision.narrative_summary, status: 'completed', icon: 'check' });
 
             const reqMsgId = (await this.callbacks.onBuildMessage('reqs', { type: 'build_status', content: this.t('checkingBackend'), status: 'working', icon: 'loader' })).id;
-            const reqRes = await this.runStep(PROMPT_KEYS['REQUIREMENTS'], JSON.stringify({ request: this.userPrompt }), DEFAULTS.REQUIREMENTS, reqMsgId);
+            const reqRes = await this.runStep(PROMPT_KEYS['REQUIREMENTS'], JSON.stringify({ request: this.userPrompt }), reqMsgId);
             if (reqRes.json.needs_backend && (!this.project.rafieiCloudProject || this.project.rafieiCloudProject.status !== 'ACTIVE')) {
                 await this.callbacks.onBuildMessage('reqs', { id: reqMsgId, type: 'action_required', content: this.t('backendActionRequired'), requiresAction: 'CONNECT_DATABASE', status: 'pending', icon: 'warning' });
-                await this.callbacks.onSuccess(this.project.code, "Backend required.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
+                await this.callbacks.onSuccess(this.project.code, "Backend connection required.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
                 return;
             }
             await this.callbacks.onBuildMessage('reqs', { id: reqMsgId, status: 'completed', icon: 'check' });
 
             // 3. PHASE PLANNING
             const planMsgId = (await this.callbacks.onBuildMessage('plan', { type: 'build_plan', content: this.t('creatingBuildPlan'), status: 'working', icon: 'loader' })).id;
-            const phasePlanRes = await this.runStep(PROMPT_KEYS['PHASE_PLANNER'], JSON.stringify({ request: this.userPrompt, classification }), DEFAULTS.PHASE_PLANNER, planMsgId);
+            const phasePlanRes = await this.runStep(PROMPT_KEYS['PHASE_PLANNER'], JSON.stringify({ request: this.userPrompt, classification }), planMsgId);
             const phases: Phase[] = phasePlanRes.json.phases.map((p: any) => ({ id: crypto.randomUUID(), title: p.title, description: p.goal, status: 'pending', retryCount: 0, type: p.type || 'ui' }));
             await this.callbacks.onPlanUpdate(phases);
             await this.callbacks.onBuildMessage('plan', { id: planMsgId, planData: phases.map(p => ({ title: p.title, status: 'pending' })), status: 'completed', icon: 'check' });
 
-            // 4. EXECUTION
+            // 4. EXECUTION LOOP
             for (let i = 0; i < phases.length; i++) {
                 const phase = phases[i];
                 this.checkAbort();
@@ -350,7 +341,7 @@ export class GenerationSupervisor {
                 const phaseMsgId = (await this.callbacks.onBuildMessage(`phase_${i}`, { type: 'build_phase', content: this.t('startingPhase', {phaseTitle: phase.title}), status: 'working', icon: 'loader' })).id;
                 await this.callbacks.onPhaseStart(i, { text: phase.title });
                 
-                const stepsRes = await this.runStep(PROMPT_KEYS['PLANNER'], JSON.stringify({ phase, prompt: this.userPrompt }), DEFAULTS.PLANNER, phaseMsgId);
+                const stepsRes = await this.runStep(PROMPT_KEYS['PLANNER'], JSON.stringify({ phase, prompt: this.userPrompt }), phaseMsgId);
                 const steps = stepsRes.json.steps || [];
 
                 for (let j = 0; j < steps.length; j++) {
@@ -358,7 +349,7 @@ export class GenerationSupervisor {
                     this.checkAbort();
                     const stepMsgId = (await this.callbacks.onBuildMessage(`phase_${i}_step_${j}`, { type: 'build_phase', content: this.t('buildingPhase', {phaseTitle: phase.title, filePath: step.path}), status: 'working', icon: 'loader', currentStepProgress: { current: j + 1, total: steps.length, stepName: step.title } })).id;
                     
-                    const builderRes = await this.runStep(PROMPT_KEYS['BUILDER'], JSON.stringify({ task: step.description, file_path: step.path, existing_files: this.accumulatedFiles.map(f=>({path: f.path, content: f.content})) }), DEFAULTS.BUILDER, stepMsgId);
+                    const builderRes = await this.runStep(PROMPT_KEYS['BUILDER'], JSON.stringify({ task: step.description, file_path: step.path, existing_files: this.accumulatedFiles.map(f=>({path: f.path, content: f.content})) }), stepMsgId);
                     
                     if (builderRes.json.file_changes) {
                         for (const change of builderRes.json.file_changes) {
@@ -368,7 +359,7 @@ export class GenerationSupervisor {
                             else this.accumulatedFiles.push({ path: change.path, content, type: 'file' });
                         }
                     }
-                    await this.callbacks.onChunkComplete({ html: '', javascript: '', css: '', explanation: `Built ${step.path}` }, `Updated ${step.path}`, { files: this.accumulatedFiles });
+                    await this.callbacks.onChunkComplete({ html: '', javascript: '', css: '', explanation: `Synthesized ${step.path}` }, `Updated ${step.path}`, { files: this.accumulatedFiles });
                     await this.callbacks.onBuildMessage(`phase_${i}_step_${j}`, { id: stepMsgId, status: 'completed', icon: 'check' });
                 }
                 phase.status = 'completed';
@@ -376,11 +367,11 @@ export class GenerationSupervisor {
                 await this.callbacks.onBuildMessage(`phase_${i}`, { id: phaseMsgId, status: 'completed', icon: 'check' });
             }
 
-            const successMsg = this.lang === 'fa' ? "🎉 برنامه شما با موفقیت ساخته شد!" : "🎉 Your application has been built successfully!";
+            const successMsg = this.lang === 'fa' ? "✅ ساخت برنامه با موفقیت انجام شد!" : "✅ Application built successfully!";
             await this.callbacks.onSuccess(this.project.code, successMsg, { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
 
         } catch (e: any) {
-            console.error("Supervisor Critical Failure:", e);
+            console.error("Supervisor Failure:", e);
             await this.callbacks.onFinalError(e.message);
         }
     }
@@ -388,13 +379,10 @@ export class GenerationSupervisor {
 
 export const generateProjectTitle = async (prompt: string, user: User, project: Project): Promise<string> => {
     try {
-        const ai = new GoogleGenAI({ apiKey: DEFAULT_GEMINI_KEY });
-        const res = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: `Generate a short (2-3 words) catchy project name for: "${prompt}"`,
-            config: { systemInstruction: "RETURN ONLY THE TITLE. NO QUOTES. NO CHAT.", temperature: 0.7 }
-        });
-        return res.text?.trim() || "My AI App";
+        const sys = await getSystemPrompt(PROMPT_KEYS['TITLE']);
+        const { text } = await robustGenerate(`Request: ${prompt}`, sys, project.id, user.id, 'TITLE');
+        const json = extractJson(text);
+        return json.title || "My AI App";
     } catch (e) { return "New Project"; }
 };
 
