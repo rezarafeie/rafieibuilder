@@ -22,7 +22,8 @@ interface AdminPanelProps {
 
 type AdminView = 'dashboard' | 'financials' | 'users' | 'projects' | 'ai' | 'webhooks' | 'errors' | 'settings' | 'database';
 
-const getErrorMessage = (e: any): string => {
+// @fix: Change parameter type from 'any' to 'unknown' for better type safety.
+const getErrorMessage = (e: unknown): string => {
     if (typeof e === 'string') return e;
     if (e instanceof Error) return e.message;
     if (e && typeof e === 'object') {
@@ -409,7 +410,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
             const defaultVal = (DEFAULTS as Record<string, string>)[key] || '';
             setPrompts(prev => ({ ...prev, [key]: defaultVal }));
             alert("Reset to default (Global override removed).");
-        } catch(e: any) {
+        } catch(e) {
+            // @fix: Remove ': any' from catch to use 'unknown' type, aligning with getErrorMessage.
             alert(`Failed to reset: ${getErrorMessage(e)}`);
         }
     };

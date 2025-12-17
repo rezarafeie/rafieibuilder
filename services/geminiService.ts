@@ -647,7 +647,8 @@ export class GenerationSupervisor {
         }
         
         const MAX_RETRIES = 3;
-        const STEP_TIMEOUT_MS = 60000; // Reduced to 60s to fail fast on stuck processes and trigger phase retry
+        const isDesignStep = key === PROMPT_KEYS['DESIGN'];
+        const STEP_TIMEOUT_MS = isDesignStep ? 120000 : 60000; // 2 minutes for DESIGN, 60s for others.
 
         let lastError;
         let startTime = Date.now();
