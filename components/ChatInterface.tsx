@@ -1,9 +1,7 @@
 
-
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Message, Suggestion, BuildState, User } from '../types';
-import { Send, Sparkles, Square, RefreshCw, Wrench, Lightbulb, Paperclip, X, Image as ImageIcon, Loader2, AlertTriangle, Cloud, Wand2, Copy, MoreHorizontal, Clock, Check, Coins, CheckCircle2, XCircle, FileCode, CheckSquare, Circle, Info, ArrowRight } from 'lucide-react';
+import { Send, Sparkles, Square, RefreshCw, Wrench, Lightbulb, Paperclip, X, Image as ImageIcon, Loader2, AlertTriangle, Cloud, Wand2, Copy, MoreHorizontal, Clock, Check, Coins, CheckCircle2, XCircle, FileCode, CheckSquare, Circle, Info, ArrowRight, Play } from 'lucide-react';
 import CloudConnectionTerminal from './CloudConnectionTerminal';
 import { useTranslation } from '../utils/translations';
 import { fileToBase64 } from '../services/cloudService';
@@ -25,12 +23,14 @@ interface ChatInterfaceProps {
   onUploadImage?: (file: File) => Promise<string>;
   onStop: () => void;
   onRetry: (prompt: string) => void;
+  onContinue?: () => void;
   onAutoFix: () => void;
   onClearBuildState?: () => void;
   onConnectDatabase?: () => void;
   onSkipBackend?: () => void;
   isThinking: boolean;
   isAutoRepairing?: boolean;
+  isResumable?: boolean;
   suggestions: Suggestion[];
   isSuggestionsLoading: boolean;
   runtimeError?: string | null;
@@ -102,7 +102,15 @@ const MessageActions: React.FC<{ msg: Message }> = ({ msg }) => {
     );
 };
 
-const ChatMessageContent: React.FC<{ msg: Message, onRetry?: () => void, onConnectDatabase?: () => void, onSkipBackend?: () => void, cloudConnectionStatus?: string }> = ({ msg, onRetry, onConnectDatabase, onSkipBackend, cloudConnectionStatus }) => {
+const ChatMessageContent: React.FC<{ 
+    msg: Message, 
+    onRetry?: () => void, 
+    onContinue?: () => void,
+    onConnectDatabase?: () => void, 
+    onSkipBackend?: () => void, 
+    cloudConnectionStatus?: string,
+    isLastMessage: boolean
+}> = ({ msg, onRetry, onContinue, onConnectDatabase, onSkipBackend, cloudConnectionStatus, isLastMessage }) => {
     const { t } = useTranslation();
 
     const getIcon = (status: Message['status'], icon?: string) => {
@@ -163,8 +171,15 @@ const ChatMessageContent: React.FC<{ msg: Message, onRetry?: () => void, onConne
                 </div>
             )}
 
-            {msg.type === 'build_error' && onRetry && (
-                <button onClick={onRetry} className="text-indigo-600 dark:text-indigo-400 font-medium hover:underline mt-2 flex items-center gap-1"><RefreshCw size={12} /> {t('retryBuild')}</button>
+            {isLastMessage && msg.type === 'build_error' && (
+                <div className="flex flex-wrap gap-2 mt-2">
+                    {onRetry && (
+                        <button onClick={onRetry} className="text-indigo-600 dark:text-indigo-400 font-medium hover:underline flex items-center gap-1"><RefreshCw size={12} /> {t('retryBuild')}</button>
+                    )}
+                    {onContinue && (
+                        <button onClick={onContinue} className="text-emerald-600 dark:text-emerald-400 font-medium hover:underline flex items-center gap-1 ml-2"><Play size={12} /> {t('continueBuild')}</button>
+                    )}
+                </div>
             )}
 
             {msg.requiresAction === 'CONNECT_DATABASE' && onConnectDatabase && (
@@ -206,7 +221,7 @@ const ChatMessageContent: React.FC<{ msg: Message, onRetry?: () => void, onConne
 
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
-    user, messages, onSendMessage, onUploadImage, onStop, onRetry, onAutoFix, onClearBuildState, onConnectDatabase, onSkipBackend, isThinking, isAutoRepairing,
+    user, messages, onSendMessage, onUploadImage, onStop, onRetry, onContinue, onAutoFix, onClearBuildState, onConnectDatabase, onSkipBackend, isThinking, isAutoRepairing, isResumable,
     suggestions, isSuggestionsLoading, runtimeError,
     cloudConnectionStatus = 'idle',
     cloudConnectionError,
@@ -315,10 +330,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         )}
         
         {/* Message Stream */}
-        {messages.map((msg) => {
+        {messages.map((msg, idx) => {
             const isUserInput = msg.type === 'user_input';
             const isAssistantResponse = msg.type === 'assistant_response';
             const isBuildMessage = ['build_plan', 'build_phase', 'build_status', 'build_error', 'action_required', 'final_summary'].includes(msg.type || '');
+            const isLastMessage = idx === messages.length - 1;
             
             return (
               <div key={msg.id} className={`flex gap-4 group animate-in fade-in slide-in-from-bottom-2 duration-300 ${isUserInput ? 'flex-row-reverse' : 'flex-row'}`}>
@@ -347,9 +363,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                      <ChatMessageContent 
                         msg={msg} 
                         onRetry={handleRetryClick} 
+                        onContinue={onContinue}
                         onConnectDatabase={onConnectDatabase} 
                         onSkipBackend={onSkipBackend}
                         cloudConnectionStatus={cloudConnectionStatus} 
+                        isLastMessage={isLastMessage}
                      />
                      {!isBuildMessage && <MessageActions msg={msg} />}
                  </div>
@@ -366,6 +384,25 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
                     <Loader2 size={14} className="animate-spin" />
                     <span>Analyzing Request...</span>
+                </div>
+            </div>
+        )}
+
+        {/* Incomplete Build Warning with Continue Button */}
+        {isResumable && !isThinking && (
+            <div className="flex gap-4 animate-in fade-in">
+                <div className="w-full bg-indigo-50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-800/50 rounded-xl p-4 flex flex-col items-center text-center">
+                    <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-900/50 flex items-center justify-center text-indigo-600 dark:text-indigo-400 mb-3">
+                        <Play size={20} fill="currentColor" className="ml-1" />
+                    </div>
+                    <h4 className="font-bold text-slate-900 dark:text-white text-sm mb-1">Resume Building?</h4>
+                    <p className="text-slate-500 dark:text-slate-400 text-xs mb-4">Your project wasn't finished. I can continue where I left off.</p>
+                    <button 
+                        onClick={onContinue} 
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-6 py-2 rounded-full transition-all shadow-lg shadow-indigo-500/20 flex items-center gap-2"
+                    >
+                        <Play size={12} fill="currentColor" /> {t('continueBuild')}
+                    </button>
                 </div>
             </div>
         )}

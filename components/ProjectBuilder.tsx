@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Project, Message, ViewMode, User, Suggestion, BuildState, VercelConfig } from '../types';
@@ -100,6 +99,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   
   const isMobile = typeof window !== 'undefined' ? window.innerWidth < 768 : false;
   
+  // @fix: Changed 'project.rafiei_cloud_project' to 'project.rafieiCloudProject' to match interface
   const cloudStatus = project?.rafieiCloudProject?.status || 'idle';
   const isCloudActive = cloudStatus === 'ACTIVE';
   const isConnectingCloud = cloudStatus === 'CREATING';
@@ -120,6 +120,11 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
   // Unified Deployment state for overlay
   const isDeployingAnywhere = isAutoDeploying || isManualDeploying;
+
+  // Resumable state detection
+  const isResumable = project && (project.status === 'idle' || project.status === 'failed') && 
+                     project.buildState && project.buildState.phases && 
+                     project.buildState.phases.some(p => p.status !== 'completed');
 
   // FORCE LOCAL PREVIEW: We always return undefined for externalUrl to ensure the iframe uses srcDoc (generated code).
   // The Vercel URL is still accessible via the Publish Dropdown.
@@ -253,6 +258,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       }
 
       // Check if project became active and we have a pending prompt to execute
+      // @fix: Changed 'project.rafiei_cloud_project' to 'project.rafieiCloudProject' to match interface
       if (project?.rafieiCloudProject?.status === 'ACTIVE' && pendingPrompt) {
           const promptToExecute = { ...pendingPrompt };
           setPendingPrompt(null); // Clear pending
@@ -285,6 +291,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
           if (p) {
               setProject(p);
               setBuildState(p.buildState || null);
+              // @fix: Changed 'p.rafiei_cloud_project' to 'p.rafieiCloudProject' to match interface
               if (p.rafieiCloudProject && p.rafieiCloudProject.status === 'CREATING') {
                   rafieiCloudService.monitorProvisioning(p.rafieiCloudProject, p.id);
               }
@@ -323,6 +330,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
   const handleStop = async () => {
     isUserStoppedRef.current = true;
+    // @fix: Changed 'project.rafiei_cloud_project' to 'project.rafieiCloudProject' to match interface
     if (isConnectingCloud && project?.rafieiCloudProject) {
         rafieiCloudService.cancelMonitoring(project.rafieiCloudProject.id);
         setPendingPrompt(null);
@@ -336,6 +344,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
             icon: 'x',
             timestamp: Date.now() 
         };
+        // @fix: Changed 'rafiei_cloud_project: undefined' to 'rafieiCloudProject: undefined' to match interface
         const updated = { ...project, rafieiCloudProject: undefined, messages: [...project.messages, cancelMsg], updatedAt: Date.now() };
         setProject(updated);
         setBuildState(null);
@@ -356,6 +365,16 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
           setProject(updated); 
           cloudService.saveProject(updated).then(() => { handleSendMessage(prompt, []); });
       }
+  };
+
+  const handleContinue = () => {
+      if (!project) return;
+      // Get original prompt
+      const lastUserMsg = [...project.messages].reverse().find(m => m.role === 'user');
+      const prompt = lastUserMsg?.content || "";
+      const images = lastUserMsg?.images?.map(url => ({ url, base64: '' })) || [];
+      
+      handleSendMessage(prompt, images, project, false, false, false, true);
   };
   
   const handleAutoFix = () => {
@@ -517,7 +536,8 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       projectOverride?: Project, 
       isInitialAutoStart = false, 
       isAutoFix = false,
-      isHidden = false // New parameter to send prompts without showing in UI
+      isHidden = false, // New parameter to send prompts without showing in UI
+      isResume = false
   ) => {
     const currentProject = projectOverride || projectRef.current;
     
@@ -529,15 +549,15 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
     isUserStoppedRef.current = false;
     setFallbackToLocalPreview(false); // Reset fallback when starting new build
 
-    if (!isAutoFix && !isInitialAutoStart) {
+    if (!isAutoFix && !isInitialAutoStart && !isResume) {
         autoRepairAttemptsRef.current = 0;
         isAutoFixingRef.current = false;
     }
 
     let updatedProject = currentProject;
 
-    // Only add user message to UI if NOT hidden and NOT initial auto-start
-    if (!isInitialAutoStart && !isHidden) {
+    // Only add user message to UI if NOT hidden and NOT initial auto-start and NOT resume
+    if (!isInitialAutoStart && !isHidden && !isResume) {
         const userMsg: Message = {
             id: crypto.randomUUID(),
             role: 'user',
@@ -554,19 +574,17 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
         setProject(updatedProject);
     }
 
-    // Using translation keys for logs instead of hardcoded English
-    const initialLogs = [
-        t('initBuild'),
-        t('analyzingReq'),
-        t('preparingEnv')
-    ];
+    // Prepare logs - if resuming, keep existing logs if we want, or just add a 'Resuming' marker
+    const initialLogs = isResume 
+        ? [...(buildState?.logs || []), "Resuming build process..."]
+        : [t('initBuild'), t('analyzingReq'), t('preparingEnv')];
     
     setBuildState({
-        plan: [],
-        phases: [],
-        currentPhaseIndex: 0,
-        currentStep: 0,
-        lastCompletedStep: -1,
+        plan: buildState?.plan || [],
+        phases: buildState?.phases || [],
+        currentPhaseIndex: buildState?.currentPhaseIndex || 0,
+        currentStep: buildState?.currentStep || 0,
+        lastCompletedStep: buildState?.lastCompletedStep || -1,
         error: null,
         logs: initialLogs
     });
@@ -574,7 +592,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
     try {
         let projectToBuild = { ...updatedProject };
         
-        if (projectToBuild.messages.filter(m => m.role === 'user').length === 1) {
+        if (!isResume && projectToBuild.messages.filter(m => m.role === 'user').length === 1) {
             const title = await generateProjectTitle(content, user, projectToBuild);
             projectToBuild.name = title;
         }
@@ -606,12 +624,9 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                 console.log("Database connection required, saving pending prompt.");
                 setPendingPrompt({ content, images });
             }
-
-            // --- AUTO DEPLOYMENT REMOVED ---
-            // Deployment is now exclusively manual via the Publish Dropdown.
         };
 
-        cloudService.triggerBuild(projectToBuild, content, images, onUpdateCallback);
+        cloudService.triggerBuild(projectToBuild, content, images, onUpdateCallback, isResume);
 
     } catch (e: any) {
         console.error("Handle Message Error", e);
@@ -673,6 +688,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   if (!project) return null;
 
   const deviceSizeClass = deviceMode === 'desktop' ? 'w-full h-full' : deviceMode === 'tablet' ? 'w-[768px] h-full max-w-full mx-auto' : 'w-[375px] h-[667px] max-w-full mx-auto';
+  // @fix: Changed 'project.rafiei_cloud_project' to 'project.rafieiCloudProject' to match interface
   const hasCloudProject = project.rafieiCloudProject != null && project.rafieiCloudProject.status === 'ACTIVE';
   
   return (
@@ -736,7 +752,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
         <div className="md:hidden h-14 bg-white dark:bg-[#0f172a] border-b border-slate-200 dark:border-slate-700 flex items-center justify-between px-4 shrink-0 z-20">
             <button onClick={() => navigate('/dashboard')}><ArrowLeft size={20} className="text-slate-600 dark:text-slate-300 rtl:rotate-180" /></button>
             <div className="flex bg-slate-100 dark:bg-slate-800 rounded-lg p-1">
-                <button onClick={() => setMobileTab('chat')} className={`px-4 py-1.5 rounded-md text-xs font-medium transition-all ${mobileTab === 'chat' ? 'bg-white dark:bg-slate-600 shadow-sm text-indigo-600 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}>Chat</button>
+                <button onClick={handleContinue} className={`px-4 py-1.5 rounded-md text-xs font-medium transition-all ${mobileTab === 'chat' ? 'bg-white dark:bg-slate-600 shadow-sm text-indigo-600 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}>Chat</button>
                 <button onClick={() => setMobileTab('preview')} className={`px-4 py-1.5 rounded-md text-xs font-medium transition-all ${mobileTab === 'preview' ? 'bg-white dark:bg-slate-600 shadow-sm text-indigo-600 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}>Preview</button>
             </div>
             <div className="relative" ref={mobilePublishRef}>
@@ -768,12 +784,14 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                     onUploadImage={handleUploadImage}
                     onStop={handleStop}
                     onRetry={handleRetry}
+                    onContinue={handleContinue}
                     onAutoFix={handleAutoFix}
                     onClearBuildState={handleClearBuildState}
                     onConnectDatabase={() => handleConnectCloud()}
                     onSkipBackend={handleSkipBackend}
                     isThinking={isThinking}
                     isAutoRepairing={isAutoRepairing}
+                    isResumable={isResumable}
                     suggestions={suggestions}
                     isSuggestionsLoading={isSuggestionsLoading}
                     runtimeError={runtimeError}
