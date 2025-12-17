@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Message, Suggestion, BuildState, User } from '../types';
 import { Send, Sparkles, Square, RefreshCw, Wrench, Lightbulb, Paperclip, X, Image as ImageIcon, Loader2, AlertTriangle, Cloud, Wand2, Copy, MoreHorizontal, Clock, Check, Coins, CheckCircle2, XCircle, FileCode, CheckSquare, Circle, Info, ArrowRight, Play, Brain, ChevronDown, ChevronUp } from 'lucide-react';
@@ -187,6 +186,12 @@ const ChatMessageContent: React.FC<{
                         )}
                     </div>
                 </div>
+                {/* NARRATION CAPTION: Shows what is currently happening under the thinking status */}
+                {msg.status === 'working' && msg.content && !msg.content.includes('thinking ....') && (
+                    <div className="ml-5.5 pl-0.5 text-[11px] text-slate-500 dark:text-slate-400 animate-in fade-in slide-in-from-left-1 duration-300 truncate">
+                        {msg.content}
+                    </div>
+                )}
             </div>
         );
 
@@ -204,6 +209,13 @@ const ChatMessageContent: React.FC<{
 
             {isExpanded && (
                 <div className="mt-2 ml-6 space-y-2 animate-in slide-in-from-top-1 duration-200 border-l-2 border-slate-100 dark:border-slate-800 pl-4 py-1">
+                    {/* Narration in dropdown */}
+                    {msg.content && !msg.content.includes('thinking ....') && (
+                        <div className="text-[11px] font-medium text-indigo-600 dark:text-indigo-400 mb-1">
+                             {msg.content}
+                        </div>
+                    )}
+                    
                     {msg.type === 'build_plan' && msg.planData && (
                         <div className="space-y-1.5">
                             <h4 className="font-semibold text-slate-800 dark:text-slate-200 text-xs mb-2 uppercase tracking-wider">{t('buildPlanTitle')}</h4>
@@ -218,11 +230,6 @@ const ChatMessageContent: React.FC<{
 
                     {msg.type === 'build_phase' && (
                         <div className="space-y-2">
-                             {msg.content && !msg.content.includes('thinking ....') && (
-                                <div className="text-xs text-slate-600 dark:text-slate-300 font-medium">
-                                    <MarkdownRenderer content={msg.content} />
-                                </div>
-                             )}
                              {msg.currentStepProgress && (
                                 <div className="space-y-1">
                                     <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">

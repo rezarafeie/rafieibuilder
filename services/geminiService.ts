@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from '@supabase/supabase-js';
 import { GeneratedCode, Message, Project, Phase, BuildAudit, AIProviderConfig, AIUsageResult, ProjectFile, User, AIDebugLog } from "../types";
@@ -55,6 +54,7 @@ Output ONLY raw JSON:
   "phases": [ { "title": "Milestone Name", "goal": "Description", "type": "ui" } ]
 }`,
     'PLANNER': `Create a list of specific file implementation steps for the CURRENT phase.
+CRITICAL: index.html is the root shell. src/main.tsx is the React entry. 
 Output ONLY raw JSON:
 {
   "steps": [ { "title": "Step Name", "path": "src/App.tsx", "description": "Details", "is_entry": true } ]
@@ -146,7 +146,6 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
         
         let contents: any = prompt;
         if (images.length > 0) {
-            // @fix: Explicitly type parts to allow mixing text and inlineData parts as per GenAI SDK requirements.
             const parts: any[] = images.map(img => {
                 let data = img;
                 let mimeType = 'image/jpeg';
@@ -215,7 +214,6 @@ export class GenerationSupervisor {
     private signal?: AbortSignal;
     private lang: Language;
     private accumulatedFiles: ProjectFile[] = [];
-    private entryPath: string | null = null;
 
     constructor(project: Project, userPrompt: string, images: string[], callbacks: SupervisorCallbacks, signal?: AbortSignal, lang: Language = 'en') {
         this.project = project;
@@ -259,9 +257,37 @@ export class GenerationSupervisor {
         throw lastError;
     }
 
+    private seedInitialFiles() {
+        const hasIndexHtml = this.accumulatedFiles.some(f => f.path === 'index.html');
+        const hasMainTsx = this.accumulatedFiles.some(f => f.path === 'src/main.tsx' || f.path === 'src/index.tsx');
+
+        if (!hasIndexHtml) {
+            this.accumulatedFiles.push({
+                path: 'index.html',
+                content: `<!DOCTYPE html><html><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>App</title><script src="https://cdn.tailwindcss.com"></script></head><body><div id="root"></div></body></html>`,
+                type: 'file',
+                language: 'html'
+            });
+        }
+
+        if (!hasMainTsx) {
+            this.accumulatedFiles.push({
+                path: 'src/main.tsx',
+                content: `import React from "react";\nimport { createRoot } from "react-dom/client";\nimport App from "./App";\n\nconst el = document.getElementById("root");\nif (el) createRoot(el).render(<React.StrictMode><App /></React.StrictMode>);`,
+                type: 'file',
+                language: 'typescript'
+            });
+        }
+    }
+
     public async start(isResume: boolean = false) {
         try {
             this.checkAbort();
+
+            // FORCE SEED for first build
+            if (!isResume && this.accumulatedFiles.length <= 1) {
+                this.seedInitialFiles();
+            }
             
             // 1. CLASSIFIER
             const classMsgId = (await this.callbacks.onBuildMessage('classifier', { type: 'build_status', content: "Strategizing approach...", status: 'working', icon: 'loader' })).id;
@@ -273,14 +299,24 @@ export class GenerationSupervisor {
                 return;
             }
 
+            // Mark classification as finished
+            await this.callbacks.onBuildMessage('classifier', { id: classMsgId, content: "Request classified for build. Designing architecture...", status: 'completed' });
+
             // 2. DESIGN & ARCHITECTURE
-            await this.callbacks.onBuildMessage('design', { type: 'build_status', content: "Designing architecture...", status: 'working', icon: 'loader' });
-            const designSpec = await this.runStep('DESIGN', `Request: ${this.userPrompt}\nFiles: ${this.accumulatedFiles.map(f=>f.path).join(',')}`, 'design');
+            const designMsgId = (await this.callbacks.onBuildMessage('design', { type: 'build_status', content: "Designing architecture...", status: 'working', icon: 'loader' })).id;
+            const designSpec = await this.runStep('DESIGN', `Request: ${this.userPrompt}\nFiles: ${this.accumulatedFiles.map(f=>f.path).join(',')}`, designMsgId);
+            
+            // Mark design as finished
+            await this.callbacks.onBuildMessage('design', { id: designMsgId, content: `Design architecture finalized with ${designSpec.pages?.length || 1} pages planned.`, status: 'completed' });
 
             // 3. PHASE PLANNING
-            const phaseRes = await this.runStep('PHASE_PLANNER', JSON.stringify({ request: this.userPrompt, design: designSpec }), 'phases');
+            const phasePlanMsgId = (await this.callbacks.onBuildMessage('phases_planning', { type: 'build_status', content: "Planning milestones...", status: 'working', icon: 'loader' })).id;
+            const phaseRes = await this.runStep('PHASE_PLANNER', JSON.stringify({ request: this.userPrompt, design: designSpec }), phasePlanMsgId);
             const phases: Phase[] = phaseRes.phases.map((p: any) => ({ id: crypto.randomUUID(), title: p.title, description: p.goal, status: 'pending', retryCount: 0, type: p.type || 'ui' }));
             await this.callbacks.onPlanUpdate(phases);
+            
+            // Mark phase planning as finished
+            await this.callbacks.onBuildMessage('phases_planning', { id: phasePlanMsgId, content: `Project broken into ${phases.length} build milestones.`, status: 'completed' });
 
             // 4. EXECUTION
             for (let i = 0; i < phases.length; i++) {
@@ -288,16 +324,21 @@ export class GenerationSupervisor {
                 if (isResume && phase.status === 'completed') continue;
                 
                 await this.callbacks.onPhaseStart(i, { text: phase.title });
-                const phaseMsgId = (await this.callbacks.onBuildMessage(`phase_${i}`, { type: 'build_phase', content: `Building Milestone: ${phase.title}`, status: 'working' })).id;
+                const phaseExecMsgId = (await this.callbacks.onBuildMessage(`phase_${i}`, { type: 'build_phase', content: `Building Milestone: ${phase.title}`, status: 'working' })).id;
                 
-                const stepsRes = await this.runStep('PLANNER', JSON.stringify({ phase, design: designSpec }), phaseMsgId);
+                const stepsRes = await this.runStep('PLANNER', JSON.stringify({ phase, design: designSpec, is_initial: i === 0 }), phaseExecMsgId);
                 const steps = stepsRes.steps || [];
 
                 for (let j = 0; j < steps.length; j++) {
                     const step = steps[j];
-                    await this.callbacks.onBuildMessage(`phase_${i}`, { id: phaseMsgId, currentStepProgress: { current: j + 1, total: steps.length, stepName: step.title } });
+                    // Provide detailed narration for each specific step
+                    await this.callbacks.onBuildMessage(`phase_${i}`, { 
+                        id: phaseExecMsgId, 
+                        content: `Milestone ${i + 1}: Implementing ${step.path} (${step.title})...`,
+                        currentStepProgress: { current: j + 1, total: steps.length, stepName: step.title } 
+                    });
                     
-                    const builderRes = await this.runStep('BUILDER', JSON.stringify({ task: step.description, path: step.path, design: designSpec, files: this.accumulatedFiles.map(f=>({path:f.path, content: f.content.substring(0, 500)})) }), phaseMsgId);
+                    const builderRes = await this.runStep('BUILDER', JSON.stringify({ task: step.description, path: step.path, design: designSpec, files: this.accumulatedFiles.map(f=>({path:f.path, content: f.content.substring(0, 500)})) }), phaseExecMsgId);
                     
                     if (builderRes.file_changes) {
                         for (const change of builderRes.file_changes) {
@@ -312,7 +353,7 @@ export class GenerationSupervisor {
                 }
                 phase.status = 'completed';
                 await this.callbacks.onPhaseComplete(i);
-                await this.callbacks.onBuildMessage(`phase_${i}`, { id: phaseMsgId, status: 'completed' });
+                await this.callbacks.onBuildMessage(`phase_${i}`, { id: phaseExecMsgId, content: `Milestone ${i + 1} (${phase.title}) completed successfully.`, status: 'completed' });
             }
 
             await this.callbacks.onSuccess(this.project.code, "Build complete.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
