@@ -57,7 +57,7 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
     if (config.id === 'google') {
         const ai = new GoogleGenAI({ apiKey: config.apiKey });
         const reqConfig: any = { 
-            systemInstruction: "IMPORTANT: You are a headless API endpoint. Return ONLY pure valid JSON. No Markdown. No code fences. No preamble.\n\n" + systemInstruction, 
+            systemInstruction: "IMPORTANT: You are a headless API endpoint. Return ONLY pure valid JSON. No Markdown. No code fences. No preamble. NO PLACEHOLDERS. GENERATE FULL FUNCTIONAL CODE.\n\n" + systemInstruction, 
             temperature: 0.1, 
             maxOutputTokens: 8192 
         };
@@ -158,9 +158,10 @@ const extractJson = (text: string | undefined): any => {
     let res = tryParse(cleaned);
     if (res) return res;
 
-    // Last-In-First-Parsed strategy (AI often talks then gives result at the end)
+    // Advanced Regex for greedy block finding
     const blocks = cleaned.match(/\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}|\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\]/g);
     if (blocks) {
+        // Search from end (often AI puts final JSON at the very bottom)
         for (let i = blocks.length - 1; i >= 0; i--) {
             res = tryParse(blocks[i]);
             if (res) return res;
@@ -177,35 +178,64 @@ const extractJson = (text: string | undefined): any => {
         if (res) return res;
     }
 
-    console.error("STRICT_JSON_ERROR. Raw Input:", text);
-    throw new Error("The AI failed to return valid JSON. Retrying may help.");
+    console.error("CRITICAL_PARSING_FAIL. Raw Input:", text);
+    throw new Error("The AI provided an invalid response format. This usually happens when instructions are too complex. Please try a simpler prompt.");
 };
 
 export const PROMPT_KEYS = {
-    'DECISION': 'sys_prompt_decision_v6', 
-    'REQUIREMENTS': 'sys_prompt_requirements_v4',
-    'PHASE_PLANNER': 'sys_prompt_phase_planner_v6', 
-    'DESIGN': 'sys_prompt_design_v4',
-    'PLANNER': 'sys_prompt_planner_v5', 
-    'BUILDER': 'sys_prompt_builder_v5', 
-    'REPAIR': 'sys_prompt_repair_v4',
-    'REPAIR_PLANNER': 'sys_prompt_repair_planner_v4',
+    'DECISION': 'sys_prompt_decision_v7', 
+    'REQUIREMENTS': 'sys_prompt_requirements_v5',
+    'PHASE_PLANNER': 'sys_prompt_phase_planner_v7', 
+    'DESIGN': 'sys_prompt_design_v5',
+    'PLANNER': 'sys_prompt_planner_v6', 
+    'BUILDER': 'sys_prompt_builder_v6', 
+    'REPAIR': 'sys_prompt_repair_v5',
+    'REPAIR_PLANNER': 'sys_prompt_repair_planner_v5',
+    'TITLE': 'sys_prompt_title_v1'
 };
 
 export const DEFAULTS = {
-    DECISION: `Return ONLY JSON: {"analysis": {"intent": "chat"|"config"|"repair"|"update"|"new_build", "complexity": "low"|"med"|"high"}, "narrative_summary": "...", "response_message": "..."}`,
+    DECISION: `Role: Strategic Intent Router.
+Goal: Map user prompt to intent.
+Rules:
+- intent: "new_build" (fresh project), "update" (incremental changes to existing), "chat" (just talking), "repair" (fixing bugs).
+Return ONLY JSON: {"analysis": {"intent": "new_build"|"update"|"chat"|"repair", "complexity": "low"|"med"|"high"}, "narrative_summary": "...", "response_message": "..."}`,
 
-    REQUIREMENTS: `Return ONLY JSON: {"needs_backend": boolean, "reasoning": "...", "features": []}`,
+    REQUIREMENTS: `Role: Backend Architect.
+Rules:
+- needs_backend: true if user needs data persistence, auth, or storage.
+Return ONLY JSON: {"needs_backend": boolean, "reasoning": "...", "features": []}`,
 
-    PHASE_PLANNER: `Return ONLY JSON: {"phases": [{"title": "...", "goal": "...", "type": "skeleton"|"ui"|"logic"|"backend"}]}`,
+    PHASE_PLANNER: `Role: React/Vite/Tailwind Project Architect.
+Rules:
+- NEVER use Python (.py) or raw HTML (.html) as your logic core.
+- The project MUST be a modern React SPA using Tailwind CSS.
+- Output a sequence of phases to build the FULL application.
+Return ONLY JSON: {"phases": [{"title": "...", "goal": "...", "type": "skeleton"|"ui"|"logic"|"backend"}]}`,
 
-    DESIGN: `Return ONLY JSON: {"design_language": "...", "pages": [{"route": "/", "name": "Home", "sections": []}], "visual_spec": "..."}`,
+    DESIGN: `Role: UI/UX Specialist. Generate design specs (color palette, spacing, typography).
+Return ONLY JSON: {"design_language": "modern/minimal", "pages": [{"route": "/", "sections": []}], "visual_spec": "..."}`,
 
-    PLANNER: `Return ONLY JSON: {"steps": [{"title": "...", "path": "src/...", "description": "..."}]}`,
+    PLANNER: `Role: Senior Software Engineer.
+Rules:
+- Break phase into atomic steps.
+- Each step MUST target a specific file path (e.g., src/components/Hero.tsx).
+Return ONLY JSON: {"steps": [{"title": "...", "path": "src/...", "description": "..."}]}`,
 
-    BUILDER: `Return ONLY JSON: {"file_changes": [{"path": "...", "content": "..."}]}`,
+    BUILDER: `Role: Expert React + Tailwind Developer.
+Rules:
+- NO PLACEHOLDERS. NO MOCK DATA.
+- Write COMPLETE, production-ready code.
+- Use Lucide React for icons.
+- If creating a component, export it as default.
+- If updating an existing file, provide the FULL updated content.
+Return ONLY JSON: {"file_changes": [{"path": "...", "content": "..."}]}`,
 
-    REPAIR_PLANNER: `Return ONLY JSON: {"patches": [{"path": "...", "content": "..."}], "explanation": "..."}`
+    REPAIR_PLANNER: `Role: Debugging Specialist. Provide minimal patches to fix runtime errors.
+Return ONLY JSON: {"patches": [{"path": "...", "content": "..."}], "explanation": "..."}`,
+
+    TITLE: `Role: Creative Copywriter. Generate a short (2-3 words) catchy project name based on prompt. 
+Return ONLY JSON: {"title": "..."}`
 };
 
 export interface SupervisorCallbacks {
@@ -423,7 +453,16 @@ export class GenerationSupervisor {
 }
 
 export const handleUserIntent = async (project: Project, prompt: string) => ({ isArchitect: true });
+
 export const generateProjectTitle = async (prompt: string, user: User, project: Project): Promise<string> => {
-    return "Application";
+    try {
+        const config = await getActiveProvider();
+        const { text } = await robustGenerate(`Prompt: ${prompt}`, DEFAULTS.TITLE, project.id, user.id, 'TITLE');
+        const json = extractJson(text);
+        return json.title || "My AI App";
+    } catch (e) {
+        return "New Project";
+    }
 };
+
 export const generateSuggestions = async (msgs: Message[], code: GeneratedCode, id: string) => [];
