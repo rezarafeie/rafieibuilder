@@ -210,7 +210,6 @@ export const translations = {
     runtimeError: 'Runtime Error Detected',
     autoFixError: 'Auto-Fix Error',
     retryBuild: 'Retry Build',
-    continueBuild: 'Continue Building',
 
     // Terminals
     buildFailed: 'Build Failed',
@@ -314,7 +313,7 @@ export const translations = {
     ready: 'آماده‌اید چیزی شگفت‌انگیز بسازید؟',
     selectProject: 'انتخاب پروژه',
     saveConnect: 'ذخیره و اتصال',
-    disconnect: 'Disconnect',
+    disconnect: 'قطع اتصال',
     requiredSql: 'تنظیمات SQL مورد نیاز',
     managedCode: 'پیکربندی پایگاه داده از طریق کد مدیریت می‌شود.',
     configureGlobal: 'پیکربندی اتصال پایگاه داده جهانی.',
@@ -465,7 +464,7 @@ export const translations = {
     buckets: 'سطل‌ها',
     createBucket: 'ایجاد سطل',
     deleteBucket: 'حذف سطل',
-    bucketEmpty: 'Bucket is empty',
+    bucketEmpty: 'سطل خالی است',
     rowsFetched: 'ردیف دریافت شد',
     noDataFound: 'داده‌ای در این جدول یافت نشد.',
     selectBucket: 'یک سطل را برای مشاهده فایل‌ها انتخاب کنید',
@@ -497,7 +496,6 @@ export const translations = {
     runtimeError: 'خطای زمان اجرا شناسایی شد',
     autoFixError: 'تعمیر خودکار خطا',
     retryBuild: 'تلاش مجدد ساخت',
-    continueBuild: 'ادامه ساخت',
 
     // Terminals
     buildFailed: 'ساخت ناموفق بود',

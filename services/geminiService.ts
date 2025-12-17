@@ -825,7 +825,7 @@ export class GenerationSupervisor {
         await this.callbacks.onFinalError(`Auto-fix failed after ${MAX_ATTEMPTS} attempts. Error: ${currentError}`);
     }
 
-    public async start(isResume: boolean = false) {
+    public async start() {
         try {
             this.checkAbort();
             let currentMessageId: string | undefined; // To track the message being updated
@@ -931,33 +931,30 @@ export class GenerationSupervisor {
                 icon: 'loader'
             })).id;
 
-            let phases: Phase[] = [];
-            // If resuming, we try to use the existing phases if they exist
-            if (isResume && this.project.buildState?.phases && this.project.buildState.phases.length > 0) {
-                phases = this.project.buildState.phases;
-            } else {
-                const phasePlanResult = await this.runStep(PROMPT_KEYS['PHASE_PLANNER'], JSON.stringify({ request: this.userPrompt, analysis: this.decision, requirements }), DEFAULTS.PHASE_PLANNER, currentMessageId);
-                const phasePlan = phasePlanResult.json;
-                
-                phases = (phasePlan.phases || []).map((p: any) => ({
-                    id: crypto.randomUUID(), 
-                    title: p.title, 
-                    description: p.description || p.goal, // Robust fallback for description
-                    status: 'pending' as const, 
-                    retryCount: 0, 
-                    type: (p.type === 'ui' || p.type === 'logic' || p.type === 'backend') ? p.type : 'ui'
-                }));
-                await this.callbacks.onPlanUpdate(phases); // This updates the internal build state
-            }
+            const phasePlanResult = await this.runStep(PROMPT_KEYS['PHASE_PLANNER'], JSON.stringify({ request: this.userPrompt, analysis: this.decision, requirements }), DEFAULTS.PHASE_PLANNER, currentMessageId);
+            const phasePlan = phasePlanResult.json;
+            
+            const phases: Phase[] = (phasePlan.phases || []).map((p: any) => ({
+                id: crypto.randomUUID(), 
+                title: p.title, 
+                description: p.description || p.goal, // Robust fallback for description
+                status: 'pending' as const, 
+                retryCount: 0, 
+                type: (p.type === 'ui' || p.type === 'logic' || p.type === 'backend') ? p.type : 'ui'
+            }));
+            
+            await this.callbacks.onPlanUpdate(phases); // This updates the internal build state
 
             await this.callbacks.onBuildMessage('phase_planner', {
                 id: currentMessageId,
                 content: this.t('planReady'),
-                planData: phases.map(p => ({title: p.title, status: p.status as any})),
+                planData: phases.map(p => ({title: p.title, status: 'pending'})),
                 status: 'completed',
                 icon: 'check',
-                details: JSON.stringify(phases, null, 2),
+                details: JSON.stringify(phasePlan, null, 2),
                 isExpandable: true,
+                executionTimeMs: phasePlanResult.executionTime,
+                creditsUsed: billingService.calculateCredits(phasePlanResult.usage.costUsd)
             });
             this.checkAbort();
 
@@ -967,10 +964,11 @@ export class GenerationSupervisor {
                 content: this.t('startingDesign'),
                 status: 'working',
                 icon: 'loader',
+                // Fix: Changed 'progress' to 'currentStepProgress'
                 currentStepProgress: { current: 0, total: 1, stepName: this.t('generatingDesignSpec') }
             })).id;
 
-            const designResult = await this.runStep(PROMPT_KEYS['DESIGN'], JSON.stringify({ user_input: this.userPrompt, decision: this.decision, phases: phases }), DEFAULTS.DESIGN, currentMessageId);
+            const designResult = await this.runStep(PROMPT_KEYS['DESIGN'], JSON.stringify({ user_input: this.userPrompt, decision: this.decision, phases: phasePlan }), DEFAULTS.DESIGN, currentMessageId);
             this.design = designResult.json;
             
             await this.callbacks.onBuildMessage('design_phase', {
@@ -978,6 +976,7 @@ export class GenerationSupervisor {
                 content: this.t('designComplete'),
                 status: 'completed',
                 icon: 'check',
+                // Fix: Changed 'progress' to 'currentStepProgress'
                 currentStepProgress: { current: 1, total: 1, stepName: this.t('designSpecComplete') },
                 details: JSON.stringify(this.design, null, 2),
                 isExpandable: true,
@@ -989,13 +988,6 @@ export class GenerationSupervisor {
             let currentPhaseIdx = 0;
             for (const phase of phases) {
                 this.checkAbort();
-
-                // RESUME LOGIC: Skip phases already completed
-                if (isResume && phase.status === 'completed') {
-                    console.log(`Resuming: Skipping completed phase ${phase.title}`);
-                    currentPhaseIdx++;
-                    continue;
-                }
                 
                 // Snapshot files state for rollback in case of phase retry
                 const accumulatedFilesSnapshot = JSON.parse(JSON.stringify(this.accumulatedFiles));
@@ -1128,10 +1120,6 @@ export class GenerationSupervisor {
                             details: JSON.stringify(detailedPlan, null, 2),
                             isExpandable: true,
                         });
-                        
-                        // Mark internal phase as completed
-                        phase.status = 'completed';
-                        await this.callbacks.onPhaseComplete(currentPhaseIdx);
                         
                         phaseSuccess = true;
 
