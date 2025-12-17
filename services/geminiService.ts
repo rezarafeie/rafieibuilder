@@ -341,6 +341,8 @@ export class GenerationSupervisor {
                 }
             } else break;
         }
+        // Finalize status to ensure buttons reset
+        await this.callbacks.onSuccess({ html: '', javascript: '', css: '', explanation: 'Repairs finished.' }, "Repairs applied.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
     }
 
     public async start(isResume: boolean = false) {
@@ -357,12 +359,16 @@ export class GenerationSupervisor {
             // BRANCH: Chat only (No Code)
             if (intent === 'chat') {
                 await this.callbacks.onBuildMessage('decision', { id: decisionMsgId, type: 'assistant_response', content: decision.response_message || decision.narrative_summary, status: 'completed', icon: 'message-square' });
+                // CRITICAL: Flip status to idle to restore the "Send" button
+                await this.callbacks.onSuccess(this.project.code, "Chat complete.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
                 return;
             }
 
             // BRANCH: Config/Database Cloud
             if (intent === 'config') {
                 await this.callbacks.onBuildMessage('decision', { id: decisionMsgId, type: 'action_required', content: decision.response_message || "I'll help you configure your database connection.", requiresAction: 'CONNECT_DATABASE', status: 'pending', icon: 'settings' });
+                // Even if action is required, we flip status to idle so the user can interact
+                await this.callbacks.onSuccess(this.project.code, "Config requested.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
                 return;
             }
 
@@ -384,6 +390,8 @@ export class GenerationSupervisor {
             const shouldBlockForBackend = (requirements.needs_backend || requirements.backendRequired) && !this.userPrompt.toLowerCase().includes('skip backend');
             if (shouldBlockForBackend && (!this.project.rafieiCloudProject || this.project.rafieiCloudProject.status !== 'ACTIVE')) {
                 await this.callbacks.onBuildMessage('requirements', { id: reqMsgId, type: 'action_required', content: this.t('backendActionRequired'), requiresAction: 'CONNECT_DATABASE', status: 'pending', icon: 'warning' });
+                // Flip to idle so user can click the button
+                await this.callbacks.onSuccess(this.project.code, "Backend required.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
                 return;
             }
 

@@ -121,7 +121,8 @@ export const cloudService = {
             rafiei_cloud_project: project.rafieiCloudProject, vercel_config: project.vercelConfig,
             deleted_at: project.deletedAt ? new Date(project.deletedAt).toISOString() : null
         };
-        await supabase.from('projects').upsert(payload);
+        const { error } = await supabase.from('projects').upsert(payload);
+        if (error) console.error("Database Save Failure:", error);
     },
 
     async createProjectSkeleton(user: User, prompt: string, images: { url: string; base64: string }[]): Promise<string> {
@@ -129,7 +130,7 @@ export const cloudService = {
         const project: Project = {
             id, userId: user.id, name: "New Project", createdAt: Date.now(), updatedAt: Date.now(),
             code: { html: '', javascript: '', css: '', explanation: '' },
-            messages: [{ id: crypto.randomUUID(), role: 'user', content: prompt, timestamp: Date.now(), images: images.map(i => i.url) }],
+            messages: [{ id: crypto.randomUUID(), role: 'user', type: 'user_input', content: prompt, timestamp: Date.now(), images: images.map(i => i.url) }],
             status: 'idle', buildState: null
         };
         await this.saveProject(project);
@@ -208,7 +209,11 @@ export const cloudService = {
 
         const supervisor = new GenerationSupervisor(currentProject, prompt, images.map(i => i.base64 || i.url), {
             onPlanUpdate: async (phases) => { updateLocalState({ buildState: { ...currentProject.buildState!, phases } }); },
-            onMessage: async (msg) => { updateLocalState({ messages: [...currentProject.messages, msg] }); },
+            onMessage: async (msg) => { 
+                const updatedMessages = [...currentProject.messages, msg];
+                updateLocalState({ messages: updatedMessages });
+                try { await this.saveProject(currentProject); } catch(e) {}
+            },
             onBuildMessage: createOrUpdateBuildMessage,
             onPhaseStart: async (idx, p) => {
                 const bs = currentProject.buildState || { currentPhaseIndex: 0, currentStep: 0, lastCompletedStep: -1, phases: [], error: null, plan: [] };
@@ -224,9 +229,15 @@ export const cloudService = {
             onStepStart: async (idx, s) => {},
             onStepComplete: async (idx, name) => {},
             onChunkComplete: async (code, exp, meta) => { updateLocalState({ code, status: 'generating', files: meta?.files || currentProject.files }); },
-            onSuccess: async (code, exp, audit, meta) => { updateLocalState({ code, status: 'idle', files: meta?.files || currentProject.files }); },
+            onSuccess: async (code, exp, audit, meta) => { 
+                updateLocalState({ code, status: 'idle', files: meta?.files || currentProject.files }); 
+                try { await this.saveProject(currentProject); } catch(e) {}
+            },
             onError: async (err, retries) => {},
-            onFinalError: async (err) => { updateLocalState({ status: 'failed' }); }
+            onFinalError: async (err) => { 
+                updateLocalState({ status: 'failed' }); 
+                try { await this.saveProject(currentProject); } catch(e) {}
+            }
         }, signal, lang as Language);
 
         supervisor.start(isResume).catch(console.error);
