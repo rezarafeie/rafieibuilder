@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Message, Suggestion, BuildState, User } from '../types';
-import { Send, Sparkles, Square, RefreshCw, Wrench, Lightbulb, Paperclip, X, Image as ImageIcon, Loader2, AlertTriangle, Cloud, Wand2, Copy, MoreHorizontal, Clock, Check, Coins, CheckCircle2, XCircle, FileCode, CheckSquare, Circle, Info, ArrowRight, Play } from 'lucide-react';
+import { Send, Sparkles, Square, RefreshCw, Wrench, Lightbulb, Paperclip, X, Image as ImageIcon, Loader2, AlertTriangle, Cloud, Wand2, Copy, MoreHorizontal, Clock, Check, Coins, CheckCircle2, XCircle, FileCode, CheckSquare, Circle, Info, ArrowRight, Play, Brain, ChevronDown, ChevronUp } from 'lucide-react';
 import CloudConnectionTerminal from './CloudConnectionTerminal';
 import { useTranslation } from '../utils/translations';
 import { fileToBase64 } from '../services/cloudService';
@@ -17,7 +17,7 @@ interface ImageUpload {
 }
 
 interface ChatInterfaceProps {
-  user: User; // Added user prop
+  user: User;
   messages: Message[];
   onSendMessage: (content: string, images: { url: string; base64: string }[]) => void;
   onUploadImage?: (file: File) => Promise<string>;
@@ -64,15 +64,50 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
 const formatTime = (ms: number | undefined) => {
   if (ms === undefined) return null;
   const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds} second${seconds !== 1 ? 's' : ''}`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-  return `${(ms / 1000).toFixed(1)}s`;
+  return `${minutes}m ${seconds % 60}s`;
 };
 
 const formatCredits = (credits: number | undefined) => {
   if (credits === undefined) return null;
   if (credits === 0) return '0';
   return credits < 0.01 ? '< 0.01' : credits.toFixed(2);
+};
+
+const ThinkingHeader: React.FC<{ msg: Message }> = ({ msg }) => {
+    const [elapsed, setElapsed] = useState(0);
+    const { t } = useTranslation();
+
+    useEffect(() => {
+        if (msg.status !== 'working' || !msg.startTime) return;
+        
+        const interval = setInterval(() => {
+            setElapsed(Date.now() - (msg.startTime || 0));
+        }, 1000);
+        
+        return () => clearInterval(interval);
+    }, [msg.status, msg.startTime]);
+
+    const displayElapsed = formatTime(elapsed);
+    const thoughtTime = formatTime(msg.thoughtDurationMs);
+
+    if (msg.status === 'completed' && msg.thoughtDurationMs) {
+        return <span className="font-medium text-slate-400 dark:text-slate-500">Thought for {thoughtTime}</span>;
+    }
+
+    if (msg.status === 'working') {
+        return (
+            <div className="flex items-center gap-2">
+                <span className="font-medium text-slate-700 dark:text-slate-300">thinking ....</span>
+                <span className="text-[10px] text-indigo-500 dark:text-indigo-400 font-mono tabular-nums opacity-80">
+                    {displayElapsed}
+                </span>
+            </div>
+        );
+    }
+
+    return <span>{msg.content && <MarkdownRenderer content={msg.content} />}</span>;
 };
 
 const MessageActions: React.FC<{ msg: Message }> = ({ msg }) => {
@@ -112,6 +147,10 @@ const ChatMessageContent: React.FC<{
     isLastMessage: boolean
 }> = ({ msg, onRetry, onContinue, onConnectDatabase, onSkipBackend, cloudConnectionStatus, isLastMessage }) => {
     const { t } = useTranslation();
+    const [isExpanded, setIsExpanded] = useState(false);
+
+    const isThinkingMessage = msg.content?.toLowerCase().includes('thinking ....') || msg.status === 'working' || msg.thoughtDurationMs;
+    const hasDetails = msg.planData || msg.currentStepProgress || msg.details || (msg.type === 'build_phase' && msg.content);
 
     const getIcon = (status: Message['status'], icon?: string) => {
         if (status === 'working') return <Loader2 size={14} className="animate-spin text-indigo-500" />;
@@ -124,14 +163,30 @@ const ChatMessageContent: React.FC<{
         return <Info size={14} className="text-slate-500" />;
     };
 
+    const toggleExpand = () => {
+        if (isThinkingMessage || hasDetails) {
+            setIsExpanded(!isExpanded);
+        }
+    };
+
     const messageContent = (msg.type === 'user_input' || msg.type === 'assistant_response') 
         ? (msg.content && <MarkdownRenderer content={msg.content} />) 
         : (
-            <div className={`flex items-center gap-2 text-sm ${msg.status === 'completed' ? 'text-slate-400 dark:text-slate-500' : 'text-slate-700 dark:text-slate-300'}`}>
-                {getIcon(msg.status, msg.icon)}
-                <span className={msg.status === 'completed' ? 'line-through-none' : ''}>
-                    {msg.content && <MarkdownRenderer content={msg.content} />}
-                </span>
+            <div 
+                className={`flex flex-col select-none ${(isThinkingMessage || hasDetails) ? 'cursor-pointer group/thought' : ''}`}
+                onClick={toggleExpand}
+            >
+                <div className="flex items-center gap-2 text-sm transition-colors">
+                    {getIcon(msg.status, msg.icon)}
+                    <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                        <ThinkingHeader msg={msg} />
+                        {(isThinkingMessage || hasDetails) && (
+                            <div className="opacity-0 group-hover/thought:opacity-100 transition-opacity">
+                                {isExpanded ? <ChevronUp size={12} className="text-slate-400" /> : <ChevronDown size={12} className="text-slate-400" />}
+                            </div>
+                        )}
+                    </div>
+                </div>
             </div>
         );
 
@@ -147,73 +202,89 @@ const ChatMessageContent: React.FC<{
             
             {messageContent}
 
-            {msg.type === 'build_plan' && msg.planData && (
-                <div className="bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 rounded-lg p-3 mt-2">
-                    <h4 className="font-semibold text-slate-800 dark:text-slate-200 text-sm mb-2">{t('buildPlanTitle')}</h4>
-                    <div className="space-y-1.5">
-                        {msg.planData.map((item, i) => (
-                            <div key={i} className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                                <Circle size={10} className="text-slate-300 dark:text-slate-600" />
-                                <span>{item.title}</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
+            {isExpanded && (
+                <div className="mt-2 ml-6 space-y-2 animate-in slide-in-from-top-1 duration-200 border-l-2 border-slate-100 dark:border-slate-800 pl-4 py-1">
+                    {msg.type === 'build_plan' && msg.planData && (
+                        <div className="space-y-1.5">
+                            <h4 className="font-semibold text-slate-800 dark:text-slate-200 text-xs mb-2 uppercase tracking-wider">{t('buildPlanTitle')}</h4>
+                            {msg.planData.map((item, i) => (
+                                <div key={i} className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                                    {item.status === 'completed' ? <Check size={10} className="text-emerald-500" /> : <Circle size={10} className="text-slate-300 dark:text-slate-600" />}
+                                    <span className={item.status === 'completed' ? 'line-through opacity-60' : ''}>{item.title}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
 
-            {msg.type === 'build_phase' && msg.currentStepProgress && msg.status === 'working' && (
-                <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-1.5 mt-2">
-                    <div
-                        className="bg-indigo-500 h-1.5 rounded-full transition-all duration-500 ease-out"
-                        style={{ width: `${(msg.currentStepProgress.current / (msg.currentStepProgress.total || 1)) * 100}%` }}
-                    ></div>
-                    <p className="text-xs text-slate-500 mt-1">{msg.currentStepProgress.stepName} ({msg.currentStepProgress.current}/{msg.currentStepProgress.total})</p>
+                    {msg.type === 'build_phase' && (
+                        <div className="space-y-2">
+                             {msg.content && !msg.content.includes('thinking ....') && (
+                                <div className="text-xs text-slate-600 dark:text-slate-300 font-medium">
+                                    <MarkdownRenderer content={msg.content} />
+                                </div>
+                             )}
+                             {msg.currentStepProgress && (
+                                <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
+                                        <span>Progress</span>
+                                        <span>{msg.currentStepProgress.current}/{msg.currentStepProgress.total} steps</span>
+                                    </div>
+                                    <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-1">
+                                        <div
+                                            className="bg-indigo-500 h-1 rounded-full transition-all duration-500 ease-out"
+                                            style={{ width: `${(msg.currentStepProgress.current / (msg.currentStepProgress.total || 1)) * 100}%` }}
+                                        ></div>
+                                    </div>
+                                    <p className="text-[10px] text-indigo-500 dark:text-indigo-400 mt-1 italic">
+                                        Working on: {msg.currentStepProgress.stepName}
+                                    </p>
+                                </div>
+                             )}
+                        </div>
+                    )}
+
+                    {msg.details && (
+                        <div className="bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-white/5 rounded p-2">
+                             <pre className="text-[10px] text-slate-500 dark:text-slate-400 font-mono overflow-x-auto whitespace-pre-wrap leading-relaxed">
+                                {msg.details}
+                            </pre>
+                        </div>
+                    )}
                 </div>
             )}
 
             {isLastMessage && msg.type === 'build_error' && (
                 <div className="flex flex-wrap gap-2 mt-2">
                     {onRetry && (
-                        <button onClick={onRetry} className="text-indigo-600 dark:text-indigo-400 font-medium hover:underline flex items-center gap-1"><RefreshCw size={12} /> {t('retryBuild')}</button>
+                        <button onClick={onRetry} className="text-indigo-600 dark:text-indigo-400 font-medium hover:underline flex items-center gap-1 text-xs"><RefreshCw size={12} /> {t('retryBuild')}</button>
                     )}
                     {onContinue && (
-                        <button onClick={onContinue} className="text-emerald-600 dark:text-emerald-400 font-medium hover:underline flex items-center gap-1 ml-2"><Play size={12} /> {t('continueBuild')}</button>
+                        <button onClick={onContinue} className="text-emerald-600 dark:text-emerald-400 font-medium hover:underline flex items-center gap-1 ml-2 text-xs"><Play size={12} /> {t('continueBuild')}</button>
                     )}
                 </div>
             )}
 
             {msg.requiresAction === 'CONNECT_DATABASE' && onConnectDatabase && (
                 cloudConnectionStatus === 'provisioning' || cloudConnectionStatus === 'waking' ? (
-                    <button disabled className="mt-3 flex items-center gap-2 bg-indigo-500 text-white text-xs font-medium px-4 py-2 rounded-lg opacity-70 cursor-not-allowed">
-                        <Loader2 size={14} className="animate-spin" /> {t('connectingCloud')}
+                    <button disabled className="mt-3 flex items-center gap-2 bg-indigo-500 text-white text-[11px] font-medium px-4 py-1.5 rounded-lg opacity-70 cursor-not-allowed">
+                        <Loader2 size={12} className="animate-spin" /> {t('connectingCloud')}
                     </button>
                 ) : cloudConnectionStatus === 'success' ? (
-                    <button disabled className="mt-3 flex items-center gap-2 bg-emerald-600 text-white text-xs font-medium px-4 py-2 rounded-lg opacity-80">
-                        <Check size={14} /> {t('cloudConnected')}
+                    <button disabled className="mt-3 flex items-center gap-2 bg-emerald-600 text-white text-[11px] font-medium px-4 py-1.5 rounded-lg opacity-80">
+                        <Check size={12} /> {t('cloudConnected')}
                     </button>
                 ) : (
                     <div className="flex flex-wrap gap-2 mt-3 animate-in fade-in slide-in-from-bottom-1">
-                        <button onClick={onConnectDatabase} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-4 py-2 rounded-lg transition-all">
-                            <Cloud size={14} /> {t('connectCloud')}
+                        <button onClick={onConnectDatabase} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-medium px-4 py-1.5 rounded-lg transition-all shadow-sm">
+                            <Cloud size={12} /> {t('connectCloud')}
                         </button>
                         {onSkipBackend && (
-                            <button onClick={onSkipBackend} className="flex items-center gap-2 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-xs font-medium px-4 py-2 rounded-lg transition-all">
-                                Continue without Backend <ArrowRight size={12} />
+                            <button onClick={onSkipBackend} className="flex items-center gap-2 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-[11px] font-medium px-4 py-1.5 rounded-lg transition-all">
+                                Skip <ArrowRight size={10} />
                             </button>
                         )}
                     </div>
                 )
-            )}
-
-            {msg.isExpandable && msg.details && (
-                <details className="mt-2 text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/50 p-2 rounded-md cursor-pointer">
-                    <summary className="font-medium flex items-center gap-2 hover:text-slate-700 dark:hover:text-slate-200">
-                        <Info size={12} /> Technical Details
-                    </summary>
-                    <pre className="mt-2 p-2 bg-black/5 dark:bg-black/20 rounded-md overflow-x-auto text-[10px] text-slate-700 dark:text-slate-300 font-mono">
-                        {msg.details}
-                    </pre>
-                </details>
             )}
         </>
     );
@@ -254,7 +325,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     wasThinkingRef.current = isThinking;
   }, [isThinking]);
 
-  // File Handling Logic
   const handleFileValidation = (file: File): boolean => {
       const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
       if (!allowedTypes.includes(file.type)) { alert('Invalid file type'); return false; }
@@ -272,7 +342,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       for (const upload of newUploads) {
           try {
               const fullBase64 = await fileToBase64(upload.file);
-              // Use full Base64 Data URI to preserve Mime Type for AI Providers
               const pureBase64 = fullBase64; 
               let serverUrl = upload.previewUrl; 
               if (onUploadImage) serverUrl = await onUploadImage(upload.file);
@@ -308,8 +377,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const handleSuggestionClick = (prompt: string) => { setInput(prompt); document.getElementById('chat-input')?.focus(); };
 
   const isUploading = stagedImages.some(img => img.uploading);
-
-  // Check if we are waiting for the first assistant response
   const isWaitingForFirstResponse = isThinking && messages.length > 0 && messages[messages.length - 1].role === 'user';
 
   return (
@@ -321,7 +388,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         </div>
       )}
       
-      <div className="flex-1 overflow-y-auto p-4 space-y-6 scroll-smooth">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 scroll-smooth">
         {messages.length === 0 && !isThinking && (
             <div className="h-full flex flex-col items-center justify-center text-slate-400 dark:text-gray-600 opacity-60">
                 <Sparkles size={32} strokeWidth={1.5} />
@@ -329,7 +396,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             </div>
         )}
         
-        {/* Message Stream */}
         {messages.map((msg, idx) => {
             const isUserInput = msg.type === 'user_input';
             const isAssistantResponse = msg.type === 'assistant_response';
@@ -337,9 +403,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             const isLastMessage = idx === messages.length - 1;
             
             return (
-              <div key={msg.id} className={`flex gap-4 group animate-in fade-in slide-in-from-bottom-2 duration-300 ${isUserInput ? 'flex-row-reverse' : 'flex-row'}`}>
-                 
-                 {/* Avatar */}
+              <div key={msg.id} className={`flex gap-3 group animate-in fade-in slide-in-from-bottom-2 duration-300 ${isUserInput ? 'flex-row-reverse' : 'flex-row'}`}>
                  {!isBuildMessage && (
                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-1 overflow-hidden shadow-sm ${
                          isUserInput ? 'bg-slate-100 dark:bg-slate-800' : 'bg-indigo-50 dark:bg-indigo-900/10'
@@ -352,13 +416,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                      </div>
                  )}
 
-                 {/* Content Bubble */}
                  <div className={`max-w-[85%] text-sm ${
                      isUserInput 
-                     ? 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 px-4 py-2.5 rounded-2xl rounded-tr-sm' 
-                     : isAssistantResponse 
-                        ? 'text-slate-700 dark:text-slate-300 pt-1'
-                        : 'w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 rounded-lg p-3' // Build messages style
+                     ? 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 px-4 py-2 rounded-2xl rounded-tr-sm' 
+                     : isAssistantResponse ? 'text-slate-700 dark:text-slate-300 pt-1' : 'text-slate-700 dark:text-slate-300 pt-0.5'
                  }`}>
                      <ChatMessageContent 
                         msg={msg} 
@@ -375,22 +436,20 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             );
         })}
 
-        {/* Transient Loading Indicator */}
         {isWaitingForFirstResponse && (
-            <div className="flex gap-4 animate-in fade-in">
+            <div className="flex gap-3 animate-in fade-in">
                 <div className="w-8 h-8 rounded-full bg-indigo-50 dark:bg-indigo-900/10 flex items-center justify-center shrink-0">
-                    <Sparkles size={14} className="text-indigo-600 dark:text-indigo-400" />
+                    <Brain size={14} className="text-indigo-600 dark:text-indigo-400" />
                 </div>
                 <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
                     <Loader2 size={14} className="animate-spin" />
-                    <span>Analyzing Request...</span>
+                    <span>thinking ....</span>
                 </div>
             </div>
         )}
 
-        {/* Incomplete Build Warning with Continue Button */}
         {isResumable && !isThinking && (
-            <div className="flex gap-4 animate-in fade-in">
+            <div className="flex gap-3 animate-in fade-in">
                 <div className="w-full bg-indigo-50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-800/50 rounded-xl p-4 flex flex-col items-center text-center">
                     <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-900/50 flex items-center justify-center text-indigo-600 dark:text-indigo-400 mb-3">
                         <Play size={20} fill="currentColor" className="ml-1" />
@@ -408,7 +467,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         )}
         
         {cloudConnectionStatus !== 'idle' && (
-            <div className="flex gap-4 animate-in fade-in">
+            <div className="flex gap-3 animate-in fade-in">
                 <div className="w-full">
                     <CloudConnectionTerminal
                         status={cloudConnectionStatus}
@@ -421,8 +480,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         )}
         
         {!isThinking && (runtimeError || isAutoRepairing) && (
-            <div className="flex gap-4 animate-in fade-in">
-                 <div className="w-8 h-8 shrink-0" /> {/* Spacer */}
+            <div className="flex gap-3 animate-in fade-in">
+                 <div className="w-8 h-8 shrink-0" />
                 <div className="p-3 bg-red-50 dark:bg-red-900/10 border border-red-100 dark:border-red-900/20 rounded-lg text-xs max-w-[85%]">
                     <div className="flex items-center gap-2 font-medium text-red-600 dark:text-red-400 mb-1">
                         {isAutoRepairing ? <Wand2 size={14} className="animate-spin" /> : <AlertTriangle size={14} />}
@@ -443,7 +502,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Area */}
       <div className="p-4 sticky bottom-0 z-20 bg-gradient-to-t from-white via-white to-transparent dark:from-[#0f172a] dark:via-[#0f172a] dark:to-transparent">
         {isSuggestionsLoading && !isThinking && suggestions.length === 0 && (
             <div className="mb-2 flex items-center gap-2 px-2 text-xs text-slate-400 animate-pulse">

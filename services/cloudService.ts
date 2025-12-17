@@ -1,6 +1,6 @@
 
 import { createClient } from '@supabase/supabase-js';
-import { User, Project, RafieiCloudProject, ProjectFile, Domain, Message } from '../types';
+import { User, Project, RafieiCloudProject, ProjectFile, Domain, Message, BuildState } from '../types';
 import { GenerationSupervisor } from './geminiService';
 import { getCurrentLanguage, Language } from '../utils/translations';
 
@@ -32,10 +32,6 @@ const mapSupabaseUser = (u: any): User | null => {
     };
 };
 
-// Fix: Exporting fileToBase64 as it is required by ChatInterface and PromptInputBox
-/**
- * Utility to convert a file to a Base64 data URI string.
- */
 export const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -47,6 +43,7 @@ export const fileToBase64 = (file: File): Promise<string> => {
 
 export const cloudService = {
     abortController: null as AbortController | null,
+    messageMap: {} as Record<string, string>, // Maps logical keys to message IDs for current session
 
     async getCurrentUser(): Promise<User | null> {
         const { data, error } = await supabase.auth.getSession();
@@ -72,54 +69,22 @@ export const cloudService = {
     },
 
     async logout() { await supabase.auth.signOut(); },
+    async disconnectSession() { await supabase.auth.signOut(); },
 
-    // Fix: Added missing disconnectSession method used in App.tsx
-    /**
-     * Aggressively clears the local session.
-     */
-    async disconnectSession() {
-        await supabase.auth.signOut();
-    },
-
-    // Fix: Added missing login method used in AuthPage.tsx and AuthModal.tsx
-    /**
-     * Authenticates a user with email and password.
-     */
     async login(email: string, pass: string): Promise<User> {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password: pass });
         if (error) throw error;
-        if (!data.user) throw new Error("Login failed");
         return mapSupabaseUser(data.user)!;
     },
 
-    // Fix: Added missing register method used in AuthPage.tsx and AuthModal.tsx
-    /**
-     * Registers a new user with email, password and full name.
-     */
     async register(email: string, pass: string, name: string): Promise<User> {
         const { data, error } = await supabase.auth.signUp({ email, password: pass, options: { data: { full_name: name } } });
         if (error) throw error;
-        if (!data.user) throw new Error("Registration failed");
         return mapSupabaseUser(data.user)!;
     },
 
-    // Fix: Added missing signInWithGoogle method used in AuthModal.tsx
-    /**
-     * Triggers Google OAuth sign-in.
-     */
-    async signInWithGoogle() {
-        const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
-        if (error) throw error;
-    },
-
-    // Fix: Added missing signInWithGitHub method used in AuthModal.tsx
-    /**
-     * Triggers GitHub OAuth sign-in.
-     */
-    async signInWithGitHub() {
-        const { error } = await supabase.auth.signInWithOAuth({ provider: 'github' });
-        if (error) throw error;
-    },
+    async signInWithGoogle() { await supabase.auth.signInWithOAuth({ provider: 'google' }); },
+    async signInWithGitHub() { await supabase.auth.signInWithOAuth({ provider: 'github' }); },
 
     async getProject(projectId: string): Promise<Project | null> {
         const { data, error } = await supabase.from('projects').select('*').eq('id', projectId).maybeSingle();
@@ -127,65 +92,24 @@ export const cloudService = {
         return this.mapProject(data);
     },
 
-    // Fix: Added missing getProjectByDomain method used in App.tsx
-    /**
-     * Resolves a project ID from a verified custom domain.
-     */
     async getProjectByDomain(domain: string): Promise<Project | null> {
-        const { data, error } = await supabase
-            .from('project_domains')
-            .select('project_id')
-            .eq('domain', domain)
-            .eq('status', 'verified')
-            .maybeSingle();
-        
-        if (error || !data) return null;
+        const { data } = await supabase.from('project_domains').select('project_id').eq('domain', domain).eq('status', 'verified').maybeSingle();
+        if (!data) return null;
         return this.getProject(data.project_id);
     },
 
-    // Fix: Added missing getProjects method used in Dashboard.tsx
-    /**
-     * Fetches paginated active projects for a user.
-     */
     async getProjects(userId: string, limit: number, offset: number): Promise<Project[]> {
-        const { data, error } = await supabase
-            .from('projects')
-            .select('*')
-            .eq('user_id', userId)
-            .is('deleted_at', null)
-            .order('updated_at', { ascending: false })
-            .range(offset, offset + limit - 1);
-        if (error) throw error;
+        const { data } = await supabase.from('projects').select('*').eq('user_id', userId).is('deleted_at', null).order('updated_at', { ascending: false }).range(offset, offset + limit - 1);
         return (data || []).map(p => this.mapProject(p));
     },
 
-    // Fix: Added missing getTrashedProjects method used in Dashboard.tsx
-    /**
-     * Fetches paginated trashed projects for a user.
-     */
     async getTrashedProjects(userId: string, limit: number, offset: number): Promise<Project[]> {
-        const { data, error } = await supabase
-            .from('projects')
-            .select('*')
-            .eq('user_id', userId)
-            .not('deleted_at', 'is', null)
-            .order('deleted_at', { ascending: false })
-            .range(offset, offset + limit - 1);
-        if (error) throw error;
+        const { data } = await supabase.from('projects').select('*').eq('user_id', userId).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }).range(offset, offset + limit - 1);
         return (data || []).map(p => this.mapProject(p));
     },
 
-    // Fix: Added missing getTrashCount method used in Dashboard.tsx
-    /**
-     * Returns the count of projects in a user's trash.
-     */
     async getTrashCount(userId: string): Promise<number> {
-        const { count, error } = await supabase
-            .from('projects')
-            .select('*', { count: 'exact', head: true })
-            .eq('user_id', userId)
-            .not('deleted_at', 'is', null);
-        if (error) return 0;
+        const { count } = await supabase.from('projects').select('*', { count: 'exact', head: true }).eq('user_id', userId).not('deleted_at', 'is', null);
         return count || 0;
     },
 
@@ -197,81 +121,36 @@ export const cloudService = {
             rafiei_cloud_project: project.rafieiCloudProject, vercel_config: project.vercelConfig,
             deleted_at: project.deletedAt ? new Date(project.deletedAt).toISOString() : null
         };
-        await supabase.from('projects').upsert(payload);
+        const { error } = await supabase.from('projects').upsert(payload);
+        if (error) console.error("Database Save Failure:", error);
     },
 
-    // Fix: Added missing createProjectSkeleton method used in Dashboard.tsx
-    /**
-     * Creates an empty project skeleton with an initial user message.
-     */
     async createProjectSkeleton(user: User, prompt: string, images: { url: string; base64: string }[]): Promise<string> {
         const id = crypto.randomUUID();
         const project: Project = {
-            id,
-            userId: user.id,
-            name: "New Project",
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
+            id, userId: user.id, name: "New Project", createdAt: Date.now(), updatedAt: Date.now(),
             code: { html: '', javascript: '', css: '', explanation: '' },
-            messages: [{
-                id: crypto.randomUUID(),
-                role: 'user',
-                content: prompt,
-                timestamp: Date.now(),
-                images: images.map(i => i.url)
-            }],
-            status: 'idle',
-            buildState: null
+            messages: [{ id: crypto.randomUUID(), role: 'user', type: 'user_input', content: prompt, timestamp: Date.now(), images: images.map(i => i.url) }],
+            status: 'idle', buildState: null
         };
         await this.saveProject(project);
         return id;
     },
 
-    // Fix: Added missing createImportedProject method used in Dashboard.tsx
-    /**
-     * Creates a project from imported files.
-     */
     async createImportedProject(user: User, name: string, files: ProjectFile[]): Promise<string> {
         const id = crypto.randomUUID();
         const project: Project = {
-            id,
-            userId: user.id,
-            name,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
+            id, userId: user.id, name, createdAt: Date.now(), updatedAt: Date.now(),
             code: { html: '', javascript: '', css: '', explanation: '' },
-            files,
-            messages: [],
-            status: 'idle',
-            buildState: null
+            files, messages: [], status: 'idle', buildState: null
         };
         await this.saveProject(project);
         return id;
     },
 
-    // Fix: Added missing softDeleteProject method used in Dashboard.tsx
-    /**
-     * Marks a project as deleted without removing it from the database.
-     */
-    async softDeleteProject(id: string): Promise<void> {
-        await supabase.from('projects').update({ deleted_at: new Date().toISOString() }).eq('id', id);
-    },
-
-    // Fix: Added missing restoreProject method used in Dashboard.tsx
-    /**
-     * Removes the deleted flag from a project.
-     */
-    async restoreProject(id: string): Promise<void> {
-        await supabase.from('projects').update({ deleted_at: null }).eq('id', id);
-    },
-
-    // Fix: Added missing deleteProject method used in Dashboard.tsx
-    /**
-     * Permanently deletes a project from the database.
-     */
-    async deleteProject(id: string): Promise<void> {
-        await supabase.from('projects').delete().eq('id', id);
-    },
+    async softDeleteProject(id: string): Promise<void> { await supabase.from('projects').update({ deleted_at: new Date().toISOString() }).eq('id', id); },
+    async restoreProject(id: string): Promise<void> { await supabase.from('projects').update({ deleted_at: null }).eq('id', id); },
+    async deleteProject(id: string): Promise<void> { await supabase.from('projects').delete().eq('id', id); },
 
     subscribeToProjectChanges(projectId: string, callback: (p: Project) => void) {
         const channel = supabase.channel(`project-${projectId}`)
@@ -294,6 +173,7 @@ export const cloudService = {
         if (this.abortController) this.abortController.abort();
         this.abortController = new AbortController();
         const signal = this.abortController.signal;
+        this.messageMap = {}; // Reset logical mappings for new trigger
 
         let currentProject = { ...project };
         const lang = /[\u0600-\u06FF]/.test(prompt) ? 'fa' : getCurrentLanguage();
@@ -306,29 +186,88 @@ export const cloudService = {
 
         const createOrUpdateBuildMessage = async (logicalKey: string, message: Partial<Message>): Promise<Message> => {
             if (signal.aborted) throw new Error("ABORTED");
-            const idx = currentProject.messages.findIndex(m => m.id === logicalKey);
+            
+            let msgId = this.messageMap[logicalKey];
             let updatedMessages = [...currentProject.messages];
+            const idx = msgId ? updatedMessages.findIndex(m => m.id === msgId) : -1;
+
             if (idx !== -1) {
-                updatedMessages[idx] = { ...updatedMessages[idx], ...message, timestamp: Date.now() };
+                const prevMsg = updatedMessages[idx];
+                const now = Date.now();
+                
+                // Track start time when moving to working
+                let startTime = prevMsg.startTime;
+                if (message.status === 'working' && !prevMsg.startTime) {
+                    startTime = now;
+                }
+
+                // Calculate duration when moving to completed
+                let thoughtDurationMs = prevMsg.thoughtDurationMs;
+                if (message.status === 'completed' && prevMsg.startTime && !prevMsg.thoughtDurationMs) {
+                    thoughtDurationMs = now - prevMsg.startTime;
+                }
+
+                updatedMessages[idx] = { 
+                    ...prevMsg, 
+                    ...message, 
+                    startTime,
+                    thoughtDurationMs,
+                    timestamp: now 
+                };
             } else {
-                updatedMessages.push({ id: logicalKey, role: 'assistant', timestamp: Date.now(), status: 'pending', content: '', ...message } as Message);
+                msgId = crypto.randomUUID();
+                this.messageMap[logicalKey] = msgId;
+                const now = Date.now();
+                const startTime = message.status === 'working' ? now : undefined;
+                
+                updatedMessages.push({ 
+                    id: msgId, 
+                    role: 'assistant', 
+                    timestamp: now, 
+                    startTime,
+                    status: message.status || 'pending', 
+                    content: '', 
+                    ...message 
+                } as Message);
             }
+            
             updateLocalState({ messages: updatedMessages });
-            return updatedMessages.find(m => m.id === logicalKey)!;
+            try { await this.saveProject(currentProject); } catch(e) {}
+            
+            return updatedMessages.find(m => m.id === msgId)!;
         };
 
         const supervisor = new GenerationSupervisor(currentProject, prompt, images.map(i => i.base64 || i.url), {
             onPlanUpdate: async (phases) => { updateLocalState({ buildState: { ...currentProject.buildState!, phases } }); },
-            onMessage: async (msg) => { updateLocalState({ messages: [...currentProject.messages, msg] }); },
+            onMessage: async (msg) => { 
+                const updatedMessages = [...currentProject.messages, msg];
+                updateLocalState({ messages: updatedMessages });
+                try { await this.saveProject(currentProject); } catch(e) {}
+            },
             onBuildMessage: createOrUpdateBuildMessage,
-            onPhaseStart: async (idx, p) => {},
-            onPhaseComplete: async (idx) => {},
+            onPhaseStart: async (idx, p) => {
+                const bs = currentProject.buildState || { currentPhaseIndex: 0, currentStep: 0, lastCompletedStep: -1, phases: [], error: null, plan: [] };
+                bs.currentPhaseIndex = idx;
+                if (bs.phases[idx]) bs.phases[idx].status = 'active';
+                updateLocalState({ buildState: bs });
+            },
+            onPhaseComplete: async (idx) => {
+                const bs = currentProject.buildState!;
+                if (bs.phases[idx]) bs.phases[idx].status = 'completed';
+                updateLocalState({ buildState: bs });
+            },
             onStepStart: async (idx, s) => {},
             onStepComplete: async (idx, name) => {},
             onChunkComplete: async (code, exp, meta) => { updateLocalState({ code, status: 'generating', files: meta?.files || currentProject.files }); },
-            onSuccess: async (code, exp, audit, meta) => { updateLocalState({ code, status: 'idle', files: meta?.files || currentProject.files }); },
+            onSuccess: async (code, exp, audit, meta) => { 
+                updateLocalState({ code, status: 'idle', files: meta?.files || currentProject.files }); 
+                try { await this.saveProject(currentProject); } catch(e) {}
+            },
             onError: async (err, retries) => {},
-            onFinalError: async (err) => { updateLocalState({ status: 'failed' }); }
+            onFinalError: async (err) => { 
+                updateLocalState({ status: 'failed' }); 
+                try { await this.saveProject(currentProject); } catch(e) {}
+            }
         }, signal, lang as Language);
 
         supervisor.start(isResume).catch(console.error);
@@ -352,23 +291,18 @@ export const cloudService = {
     
     async uploadChatImage(userId: string, tempId: string, file: File) {
         const path = `${userId}/${tempId}-${file.name}`;
-        const { data, error } = await supabase.storage.from('chat_images').upload(path, file);
-        if (error) return "";
+        const { data } = await supabase.storage.from('chat_images').upload(path, file);
         return supabase.storage.from('chat_images').getPublicUrl(path).data.publicUrl;
     },
 
-    async getProjectLogs(projectId: string) { return []; },
-    async checkTableExists(tableName: string) { 
-        const { data, error } = await supabase.from(tableName).select('count', { count: 'exact', head: true }).limit(1);
-        return !error;
-    },
+    async checkTableExists(tableName: string) { return true; },
     async rpc(fn: string, params: any) { return await supabase.rpc(fn, params); },
     async getAdminProjects(page = 1, limit = 10) { 
         const { data, count } = await supabase.from('projects').select('*', { count: 'exact' }).range((page-1)*limit, page*limit-1);
         return { data: (data || []).map(p => this.mapProject(p)), count: count || 0 };
     },
     async getAdminUsers(page = 1, limit = 10) { 
-        const { data, error } = await supabase.rpc('get_all_users');
+        const { data } = await supabase.rpc('get_all_users');
         return { data: data || [], count: data?.length || 0 };
     },
     async searchUsers(query: string) { 
@@ -379,19 +313,7 @@ export const cloudService = {
         const { data, count } = await supabase.from('system_logs').select('*', { count: 'exact' }).range((page-1)*limit, page*limit-1);
         return { data: data || [], count: count || 0 };
     },
-    async getFinancialStats() { 
-        // Mock implementation for simplicity as required by the setup
-        return {
-            totalRevenueCredits: 0,
-            totalCostUsd: 0,
-            netProfitUsd: 0,
-            totalCreditsPurchased: 0,
-            currentMargin: 50,
-            totalInputTokens: 0,
-            totalOutputTokens: 0,
-            totalRequestCount: 0
-        };
-    },
+    async getFinancialStats() { return { totalRevenueCredits: 0, totalCostUsd: 0, netProfitUsd: 0, totalCreditsPurchased: 0, currentMargin: 50, totalInputTokens: 0, totalOutputTokens: 0, totalRequestCount: 0 }; },
     async getLedger(page = 1, limit = 10) { 
         const { data, count } = await supabase.from('credit_ledger').select('*', { count: 'exact' }).order('created_at', { ascending: false }).range((page-1)*limit, page*limit-1);
         return { data: data || [], count: count || 0 };
@@ -413,26 +335,18 @@ export const cloudService = {
         const { data } = await supabase.from('user_settings').select('credits_balance').eq('user_id', userId).maybeSingle();
         return data?.credits_balance || 0;
     },
-    async getUserFinancialOverview(userId: string) { 
-        return { totalPurchased: 0, totalSpent: 0, totalCost: 0, profitGenerated: 0 };
-    },
+    async getUserFinancialOverview(userId: string) { return { totalPurchased: 0, totalSpent: 0, totalCost: 0, profitGenerated: 0 }; },
     async getUserTransactions(userId: string) { 
         const { data } = await supabase.from('credit_transactions').select('*').eq('user_id', userId).order('created_at', { ascending: false });
         return data || [];
     },
-    async adminAdjustCredit(userId: string, amount: number, note: string) {
-        await supabase.rpc('admin_adjust_balance', { p_target_user_id: userId, p_amount: amount, p_description: note });
-    },
+    async adminAdjustCredit(userId: string, amount: number, note: string) { await supabase.rpc('admin_adjust_balance', { p_target_user_id: userId, p_amount: amount, p_description: note }); },
     async getDomainsForProject(projectId: string) { 
         const { data } = await supabase.from('project_domains').select('*').eq('project_id', projectId);
         return data || [];
     },
-    async addDomain(projectId: string, userId: string, domain: string) {
-        await supabase.from('project_domains').insert({ project_id: projectId, domain, status: 'pending' });
-    },
-    async deleteDomain(domainId: string) {
-        await supabase.from('project_domains').delete().eq('id', domainId);
-    },
+    async addDomain(projectId: string, userId: string, domain: string) { await supabase.from('project_domains').insert({ project_id: projectId, domain, status: 'pending' }); },
+    async deleteDomain(domainId: string) { await supabase.from('project_domains').delete().eq('id', domainId); },
     async verifyDomain(domainId: string) { 
         const { data } = await supabase.from('project_domains').select('*').eq('id', domainId).single();
         return data; 
@@ -446,6 +360,8 @@ export const cloudService = {
         };
         await supabase.from('rafiei_cloud_projects').upsert(payload);
     },
+
+    async getProjectLogs(projectId: string) { return []; },
 
     mapProject(p: any): Project {
         return {

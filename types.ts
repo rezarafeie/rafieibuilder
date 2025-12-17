@@ -1,7 +1,4 @@
 
-
-
-
 export interface GeneratedCode {
   html: string;
   javascript: string;
@@ -55,28 +52,24 @@ export interface ProjectFile {
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system';
-  content?: string; // Made optional to allow messages like build_plan to exist without a direct 'content' string
+  content?: string; 
   timestamp: number;
   images?: string[];
-  // Refined message types for better UX storytelling
   type?: 'user_input' | 'assistant_response' | 'build_plan' | 'build_phase' | 'build_status' | 'build_error' | 'action_required' | 'final_summary';
-  // New lifecycle status for messages (makes icons and progress dynamic)
   status?: 'pending' | 'working' | 'completed' | 'failed'; 
-  // Explicit icon (e.g., 'loader', 'check', 'x')
   icon?: string; 
-  // Data for build_plan type
   planData?: { title: string, status: 'pending' | 'active' | 'completed' | 'failed' }[];
-  // Current step within a phase for build_phase type
   currentStepProgress?: { current: number; total: number; stepName: string; };
-  // Detailed technical logs/JSON for expandable view
   details?: string;
-  // Whether the details section should be expandable/visible
   isExpandable?: boolean;
   requiresAction?: string;
   executionTimeMs?: number;
   creditsUsed?: number;
   providerUsed?: string;
   modelUsed?: string;
+  // Timing fields for "thinking" experience
+  startTime?: number;
+  thoughtDurationMs?: number;
 }
 
 export interface RafieiCloudProject {
@@ -174,7 +167,7 @@ export interface CreditLedgerEntry {
   profitMargin: number;
   creditsDeducted: number;
   createdAt: number;
-  meta?: any; // Stores detailed logs, prompts, and provider details
+  meta?: any; 
 }
 
 export interface CreditTransaction {
@@ -250,7 +243,7 @@ export interface DecisionJSON {
     summary: string;
     complexity: 'low' | 'medium' | 'high';
   };
-  narrative_summary: string; // Added this property
+  narrative_summary: string; 
   backend_detection: {
     needs_backend: boolean;
     required_backend_features: string[];
