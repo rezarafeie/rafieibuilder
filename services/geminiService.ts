@@ -121,6 +121,7 @@ export interface SupervisorCallbacks {
     onSuccess: (code: GeneratedCode, explanation: string, audit: BuildAudit, meta?: any) => Promise<void>;
     onError: (error: string, retries: number) => Promise<void>;
     onFinalError: (error: string, audit?: BuildAudit) => Promise<void>;
+    waitForPreview?: (timeoutMs: number) => Promise<{success: boolean, error?: string}>;
 }
 
 export class GenerationSupervisor {
@@ -130,6 +131,7 @@ export class GenerationSupervisor {
     private callbacks: SupervisorCallbacks;
     private lang: Language;
     private accumulatedFiles: ProjectFile[] = [];
+    private entryPath: string | null = null;
 
     constructor(project: Project, userPrompt: string, images: string[], callbacks: SupervisorCallbacks, signal?: AbortSignal, lang: Language = 'en') {
         this.project = project;
@@ -155,36 +157,65 @@ export class GenerationSupervisor {
                 return;
             }
 
-            // 2. DESIGN & ARCHITECTURE (Mandatory Structural Blueprint)
+            // 2. DESIGN & ARCHITECTURE
             await this.callbacks.onBuildMessage('design', { type: 'build_status', content: "Drafting app architecture...", status: 'working', icon: 'loader' });
             const designSpec = await this.runStep(PROMPT_KEYS['DESIGN'], `REQUEST: ${this.userPrompt}\nEXISTING_FILES: ${this.accumulatedFiles.map(f=>f.path).join(',')}`, 'design');
             await this.callbacks.onBuildMessage('design', { content: "Architecture defined.", status: 'completed', icon: 'check', isExpandable: true, details: JSON.stringify(designSpec, null, 2) });
 
-            // 3. PHASE PLANNING (Informed by Design)
+            // 3. PHASE PLANNING
             const phasePlan = await this.runStep(PROMPT_KEYS['PHASE_PLANNER'], `DESIGN_SPEC: ${JSON.stringify(designSpec)}\nUSER_PROMPT: ${this.userPrompt}`, 'plan');
             const phases: Phase[] = phasePlan.phases.map((p: any) => ({ id: crypto.randomUUID(), title: p.title, description: p.goal, status: 'pending', retryCount: 0, type: p.type || 'ui' }));
             await this.callbacks.onPlanUpdate(phases);
 
-            // 4. EXECUTION
+            // 4. EXECUTION ENGINE
             for (let i = 0; i < phases.length; i++) {
                 const phase = phases[i];
                 if (isResume && phase.status === 'completed') continue;
                 
                 await this.callbacks.onPhaseStart(i, { text: phase.title });
-                const steps = (await this.runStep(PROMPT_KEYS['PLANNER'], `PHASE: ${phase.title}\nDESIGN: ${JSON.stringify(designSpec)}`, `phase_${i}`)).steps;
+                const steps = (await this.runStep(PROMPT_KEYS['PLANNER'], `PHASE: ${phase.title}\nDESIGN: ${JSON.stringify(designSpec)}\nFILES: ${this.accumulatedFiles.map(f=>f.path).join(',')}`, `phase_${i}`)).steps;
 
                 for (let j = 0; j < steps.length; j++) {
                     const step = steps[j];
+                    
+                    // --- MANTATORY: depends_on Validation ---
+                    if (step.depends_on && Array.isArray(step.depends_on)) {
+                        for (const depPath of step.depends_on) {
+                            const exists = this.accumulatedFiles.some(f => f.path === depPath);
+                            if (!exists) {
+                                await this.callbacks.onBuildMessage(`step_${i}_${j}`, { type: 'build_phase', content: `Blocking: Missing dependency ${depPath}`, status: 'failed', icon: 'alert-triangle' });
+                                throw new Error(`Build sequencing error: Step for ${step.path} cannot proceed without ${depPath}.`);
+                            }
+                        }
+                    }
+
                     await this.callbacks.onBuildMessage(`step_${i}_${j}`, { type: 'build_phase', content: `Building ${step.path}...`, status: 'working' });
                     
-                    const builderRes = await this.runStep(PROMPT_KEYS['BUILDER'], `FILE: ${step.path}\nTASK: ${step.description}\nCONTEXT: ${JSON.stringify(designSpec)}`, `builder_${i}_${j}`);
+                    const builderRes = await this.runStep(PROMPT_KEYS['BUILDER'], `FILE: ${step.path}\nTASK: ${step.description}\nCONTEXT: ${JSON.stringify(designSpec)}\nEXISTING_FILES: ${this.accumulatedFiles.map(f=>f.path).join(',')}`, `builder_${i}_${j}`);
                     
                     if (builderRes.file_changes) {
                         for (const change of builderRes.file_changes) {
-                            const idx = this.accumulatedFiles.findIndex(f => f.path === change.path);
+                            // --- MANDATORY: action logic (create|update) ---
+                            const existingIdx = this.accumulatedFiles.findIndex(f => f.path === change.path);
+                            const action = change.action || 'update';
+
+                            if (action === 'create' && existingIdx !== -1) {
+                                console.log(`Skipping create action for existing file: ${change.path}`);
+                                continue; 
+                            }
+
                             const content = sanitizeFileContent(change.content, change.path);
-                            if (idx !== -1) this.accumulatedFiles[idx].content = content;
-                            else this.accumulatedFiles.push({ path: change.path, content, type: 'file' });
+                            
+                            // --- MANDATORY: is_entry logic ---
+                            if (change.is_entry || step.is_entry) {
+                                this.entryPath = change.path;
+                            }
+
+                            if (existingIdx !== -1) {
+                                this.accumulatedFiles[existingIdx].content = content;
+                            } else {
+                                this.accumulatedFiles.push({ path: change.path, content, type: 'file' });
+                            }
                         }
                     }
                     await this.callbacks.onChunkComplete(this.project.code, `Updated ${step.path}`, { files: this.accumulatedFiles });
@@ -194,15 +225,59 @@ export class GenerationSupervisor {
                 await this.callbacks.onPhaseComplete(i);
             }
 
+            // --- MANDATORY: Post-Build Validation ---
+            await this.validateRuntime();
+
             await this.callbacks.onSuccess(this.project.code, "Build complete.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
         } catch (e: any) {
             await this.callbacks.onFinalError(e.message);
         }
     }
 
+    private async validateRuntime() {
+        const buildStatusId = (await this.callbacks.onBuildMessage('validation', { type: 'build_status', content: "Verifying runtime stability...", status: 'working', icon: 'shield' })).id;
+
+        // 1. Entry File Check
+        const hasEntry = this.entryPath && this.accumulatedFiles.some(f => f.path === this.entryPath);
+        const hasStandardEntry = this.accumulatedFiles.some(f => f.path.includes('App.tsx') || f.path.includes('main.tsx'));
+        
+        if (!hasEntry && !hasStandardEntry) {
+            await this.callbacks.onBuildMessage('validation', { id: buildStatusId, status: 'failed' });
+            return this.repair("Critical Error: No runtime entry point found. App cannot mount.");
+        }
+
+        // 2. Preview Health Check
+        if (this.callbacks.waitForPreview) {
+            const check = await this.callbacks.waitForPreview(4000); // Wait 4s for mount
+            if (!check.success) {
+                await this.callbacks.onBuildMessage('validation', { id: buildStatusId, status: 'failed' });
+                return this.repair(`Runtime Error: ${check.error || "Preview rendered blank. This usually indicates a broken export or missing import."}`);
+            }
+        }
+
+        await this.callbacks.onBuildMessage('validation', { id: buildStatusId, content: "Runtime validated. Preview healthy.", status: 'completed', icon: 'check-circle' });
+    }
+
     public async repair(error: string) {
-        const res = await this.runStep(PROMPT_KEYS['REPAIR_PLANNER'], `ERROR: ${error}`, 'repair');
-        // ... (Repair logic remains same but uses DB prompt)
+        const msgId = (await this.callbacks.onBuildMessage('repair', { type: 'build_status', content: "Self-healing triggered...", status: 'working', icon: 'wrench' })).id;
+        try {
+            const res = await this.runStep(PROMPT_KEYS['REPAIR_PLANNER'], JSON.stringify({ error, files: this.accumulatedFiles.map(f=>({path: f.path, content: f.content.substring(0, 1000)})) }), msgId);
+            if (res.patches) {
+                for (const patch of res.patches) {
+                    const idx = this.accumulatedFiles.findIndex(f => f.path === patch.path);
+                    const content = sanitizeFileContent(patch.content, patch.path);
+                    if (idx !== -1) this.accumulatedFiles[idx].content = content;
+                    else this.accumulatedFiles.push({ path: patch.path, content, type: 'file' });
+                }
+                await this.callbacks.onChunkComplete(this.project.code, "Applied healing patches", { files: this.accumulatedFiles });
+            }
+            await this.callbacks.onBuildMessage('repair', { id: msgId, content: "Self-healing complete. Re-validating...", status: 'completed', icon: 'check' });
+            
+            // Recursively validate after repair
+            await this.validateRuntime();
+        } catch (e: any) {
+            await this.callbacks.onFinalError("Repair failed: " + e.message);
+        }
     }
 }
 
