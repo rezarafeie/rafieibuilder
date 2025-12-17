@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Project, Message, ViewMode, User, Suggestion, BuildState, VercelConfig } from '../types';
@@ -573,12 +572,6 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
             updatedAt: Date.now() 
         };
         setProject(updatedProject);
-        // CRITICAL: Save the user message to DB immediately so it's not lost on refresh
-        try {
-            await cloudService.saveProject(updatedProject);
-        } catch (e) {
-            console.warn("Immediate save of user message failed:", e);
-        }
     }
 
     // Prepare logs - if resuming, keep existing logs if we want, or just add a 'Resuming' marker

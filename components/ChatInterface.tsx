@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Message, Suggestion, BuildState, User } from '../types';
-import { Send, Sparkles, Square, RefreshCw, Wrench, Lightbulb, Paperclip, X, Image as ImageIcon, Loader2, AlertTriangle, Cloud, Wand2, Copy, MoreHorizontal, Clock, Check, Coins, CheckCircle2, XCircle, FileCode, CheckSquare, Circle, Info, ArrowRight, Play, Brain } from 'lucide-react';
+import { Send, Sparkles, Square, RefreshCw, Wrench, Lightbulb, Paperclip, X, Image as ImageIcon, Loader2, AlertTriangle, Cloud, Wand2, Copy, MoreHorizontal, Clock, Check, Coins, CheckCircle2, XCircle, FileCode, CheckSquare, Circle, Info, ArrowRight, Play } from 'lucide-react';
 import CloudConnectionTerminal from './CloudConnectionTerminal';
 import { useTranslation } from '../utils/translations';
 import { fileToBase64 } from '../services/cloudService';
@@ -379,11 +379,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         {isWaitingForFirstResponse && (
             <div className="flex gap-4 animate-in fade-in">
                 <div className="w-8 h-8 rounded-full bg-indigo-50 dark:bg-indigo-900/10 flex items-center justify-center shrink-0">
-                    <Brain size={14} className="text-indigo-600 dark:text-indigo-400" />
+                    <Sparkles size={14} className="text-indigo-600 dark:text-indigo-400" />
                 </div>
                 <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
                     <Loader2 size={14} className="animate-spin" />
-                    <span>thinking ....</span>
+                    <span>Analyzing Request...</span>
                 </div>
             </div>
         )}
