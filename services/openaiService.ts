@@ -1,3 +1,4 @@
+
 import { AIUsageResult } from "../types";
 
 export const openaiService = {
@@ -9,9 +10,7 @@ export const openaiService = {
         images?: string[]
     ): Promise<{ text: string, usage: AIUsageResult }> {
         
-        const PROXY_URL = 'https://corsproxy.io/?key=83a20021&url';
         const OPENAI_URL = 'https://api.openai.com/v1/responses';
-        const TARGET_URL = `${PROXY_URL}${encodeURIComponent(OPENAI_URL)}`;
 
         // Context Identifiers
         const ORG_ID = 'org-zhaJWr2MhEIQCCW7WAxaUe0k';
@@ -29,7 +28,7 @@ export const openaiService = {
             store: true
         };
 
-        const response = await fetch(TARGET_URL, {
+        const response = await fetch(OPENAI_URL, {
             method: "POST",
             headers: {
                 "Authorization": `Bearer ${apiKey}`,
@@ -54,11 +53,12 @@ export const openaiService = {
 
         const data = await response.json();
         
-        // Extract raw text from nested v1/responses structure
+        // Extract raw text from nested v1/responses structure: data.output[0].content[0].text
         let rawText = "";
         try {
             const contentParts = data.output?.[0]?.content;
             if (Array.isArray(contentParts)) {
+                // Find the part with type 'output_text' as per your provided schema
                 const textPart = contentParts.find((c: any) => c.type === 'output_text') || contentParts[0];
                 rawText = textPart?.text || textPart?.value || "";
             }
@@ -70,6 +70,7 @@ export const openaiService = {
         const inputTokens = usage.input_tokens || 0;
         const outputTokens = usage.output_tokens || 0;
 
+        // Pricing estimates for high-end models (gpt-5.2/4.1)
         const inputPrice = 5.00; 
         const outputPrice = 15.00;
         const cost = ((inputTokens / 1_000_000) * inputPrice) + ((outputTokens / 1_000_000) * outputPrice);

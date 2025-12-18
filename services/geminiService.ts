@@ -1,3 +1,5 @@
+
+import { GoogleGenAI } from "@google/genai";
 import { createClient } from '@supabase/supabase-js';
 import { GeneratedCode, Message, Project, Phase, BuildAudit, AIProviderConfig, AIUsageResult, ProjectFile, User, AIDebugLog } from "../types";
 import { billingService } from "./billingService";
@@ -75,17 +77,26 @@ const getSystemPrompt = async (key: string): Promise<string> => {
 
 const preRepairMangledJson = (text: string): string => {
     let result = text.trim();
+
+    // 1. Handle unescaped backticks in code blocks inside JSON
+    // AIs often output: "content": `...` instead of "content": "..."
     const backtickRegex = /("[\w_]+")\s*:\s*`([\s\S]*?)`(\s*[,}\]])/g;
     result = result.replace(backtickRegex, (match, key, content, suffix) => {
         return `${key}: ${JSON.stringify(content)}${suffix}`;
     });
+
+    // 2. Handle common LLM unescaped newlines in JSON strings
+    // This is the #1 cause of parse errors. We find property values and ensure they are one string.
+    // This uses a non-greedy lookahead to find the end of a multi-line string value
     const multilineValueRegex = /("[\w_]+")\s*:\s*"([\s\S]*?)"(\s*[,}\]])/g;
     result = result.replace(multilineValueRegex, (match, key, content, suffix) => {
+        // If the content has actual newlines (not escaped), JSON.stringify will properly escape them.
         if (content.includes('\n')) {
             return `${key}: ${JSON.stringify(content)}${suffix}`;
         }
         return match;
     });
+
     return result;
 };
 
@@ -121,6 +132,7 @@ const repairJson = (json: string): string => {
 const extractJson = (text: string | undefined): any => {
     if (!text) throw new Error("AI returned empty response");
     
+    // Fast path: try clean parse after removing potential thinking tags
     let cleaned = text
         .replace(/<(?:thought|thinking)>[\s\S]*?<\/(?:thought|thinking)>/gi, "")
         .replace(/\[thinking\][\s\S]*?\[\/thinking\]/gi, "")
@@ -133,6 +145,7 @@ const extractJson = (text: string | undefined): any => {
     try { 
         return JSON.parse(cleaned); 
     } catch (e) {
+        // Slow path: Locate actual boundaries and repair
         cleaned = preRepairMangledJson(cleaned);
         const firstBrace = cleaned.indexOf('{');
         const firstBracket = cleaned.indexOf('[');
@@ -154,11 +167,12 @@ const extractJson = (text: string | undefined): any => {
                 try { 
                     return JSON.parse(repaired); 
                 } catch (finalError) {
+                    // Last resort: loose parsing via Function
                     try {
                         const fn = new Function(`return (${repaired})`);
                         return fn();
                     } catch (looseError) {
-                        throw new Error(`JSON Extraction failed. Original error: ${e.message}`);
+                        throw new Error(`JSON Extraction failed across all strategies. Original error: ${e.message}`);
                     }
                 }
             }
@@ -181,15 +195,17 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
     if (!config.apiKey) throw new Error(`API Key missing for ${config.name}.`);
     
     if (config.id === 'google') {
-        const model = config.model || 'gemini-3-flash-preview';
-        const PROXY_URL = 'https://corsproxy.io/?key=83a20021&url';
-        const TARGET_URL = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.apiKey}`;
-        
-        const contents: any[] = [];
-        const parts: any[] = [];
-        
+        const ai = new GoogleGenAI({ apiKey: config.apiKey });
+        const reqConfig: any = { 
+            systemInstruction, 
+            temperature: 0.1, 
+            maxOutputTokens: 16384,
+            thinkingConfig: { thinkingBudget: 8192 },
+            responseMimeType: 'application/json'
+        };
+        let contents: any = prompt;
         if (images.length > 0) {
-            images.forEach(img => {
+            const parts: any[] = images.map(img => {
                 let data = img;
                 let mimeType = 'image/jpeg';
                 if (img.startsWith('data:')) {
@@ -197,52 +213,19 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
                     data = split[1];
                     mimeType = split[0].split(':')[1].split(';')[0];
                 }
-                parts.push({ inlineData: { mimeType, data } });
+                return { inlineData: { mimeType, data } };
             });
+            parts.push({ text: prompt });
+            contents = { parts };
         }
-        
-        parts.push({ text: prompt });
-        contents.push({ role: 'user', parts });
-
-        const payload = {
-            contents: contents,
-            generationConfig: { 
-                temperature: 0.1, 
-                maxOutputTokens: 16384,
-                responseMimeType: 'application/json'
-            },
-            systemInstruction: { parts: [{ text: systemInstruction }] }
-        };
-
-        const response = await fetch(`${PROXY_URL}${encodeURIComponent(TARGET_URL)}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`Gemini Proxy Error ${response.status}: ${errText}`);
-        }
-
-        const data = await response.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-        const input = Number(data.usageMetadata?.promptTokenCount || 0);
-        const output = Number(data.usageMetadata?.candidatesTokenCount || 0);
-        const cost = billingService.calculateRawCost(model, input, output);
-
-        return { 
-            text, 
-            usage: { 
-                promptTokens: input, 
-                completionTokens: output, 
-                costUsd: cost, 
-                provider: 'google', 
-                model 
-            } 
-        };
+        const response = await ai.models.generateContent({ model: config.model || 'gemini-3-pro-preview', contents, config: reqConfig });
+        const input = Number(response.usageMetadata?.promptTokenCount || 0);
+        const output = Number(response.usageMetadata?.candidatesTokenCount || 0);
+        const cost = billingService.calculateRawCost(config.model || 'gemini-3-pro-preview', input, output);
+        return { text: response.text || "{}", usage: { promptTokens: input, completionTokens: output, costUsd: cost, provider: 'google', model: config.model || 'gemini-3-pro-preview' } };
     } 
     
+    // OpenAI and Claude now share the exact same logic flow here
     if (config.id === 'openai') return await openaiService.generateContent(config.apiKey, config.model, prompt, systemInstruction, images);
     if (config.id === 'claude') return await claudeService.generateContent(config.apiKey, config.model, prompt, systemInstruction, images);
     
@@ -256,6 +239,7 @@ const robustGenerate = async (prompt: string, systemInstruction: string, project
         billingService.chargeUser(userId, projectId, opType, result.usage.model, { promptTokenCount: result.usage.promptTokens, candidatesTokenCount: result.usage.completionTokens, costUsd: result.usage.costUsd }, { messageId: options?.messageId, ...options?.meta }).catch(console.error);
         return result;
     } catch (error: any) {
+        // Auto-fallback mechanism
         const fallback = await aiProviderService.getFallbackConfig();
         if (fallback && fallback.apiKey && fallback.id !== activeConfig.id) {
             const result = await executeAIRequest(fallback, prompt, systemInstruction, images);
@@ -314,6 +298,7 @@ export class GenerationSupervisor {
         if (this.callbacks.onAIDebugLog) {
             this.callbacks.onAIDebugLog({ id: crypto.randomUUID(), timestamp: Date.now(), stepKey: key, model: usage.model, systemInstruction: sys, prompt, response: text }, logicalMessageKey);
         }
+        // Centralized JSON Extraction used for ALL providers
         return extractJson(text);
     }
 
@@ -345,6 +330,7 @@ export class GenerationSupervisor {
                 return;
             }
 
+            // --- SURGICAL UPDATE FLOW ---
             if (classification.intent === 'update' && this.accumulatedFiles.length > 2) {
                 await this.callbacks.onBuildMessage('classifier', { id: classMsgId, status: 'completed', content: "Update intent detected." });
                 const updateMsgId = (await this.callbacks.onBuildMessage('fast_update', { type: 'build_status', content: "Surgically applying changes...", status: 'working', icon: 'wrench', startTime: Date.now() })).id;
@@ -361,6 +347,7 @@ export class GenerationSupervisor {
                 return;
             }
 
+            // --- FULL ARCHITECTURE FLOW ---
             await this.callbacks.onBuildMessage('classifier', { id: classMsgId, status: 'completed', content: "Starting architecture phase." });
 
             const designMsgId = (await this.callbacks.onBuildMessage('design', { type: 'build_status', content: "Designing layout...", status: 'working', icon: 'loader', startTime: Date.now() })).id;
