@@ -10,23 +10,30 @@ export const openaiService = {
         images?: string[]
     ): Promise<{ text: string, usage: AIUsageResult }> {
         
+        // Use Proxy for CORS
         const PROXY_URL = 'https://corsproxy.io/?';
-        const OPENAI_URL = 'https://api.openai.com/v1/responses';
+        const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 
-        // Provided specific ID context
+        // Organization and Project IDs (optional, but kept if user needs them)
         const ORG_ID = 'org-zhaJWr2MhEIQCCW7WAxaUe0k';
         const PROJ_ID = 'proj_WXVi3fbcro03UCUcQztqhDag';
 
-        // Combine system instruction and prompt for the 'input' field
-        const fullInput = systemInstruction 
-            ? `System Instructions:\n${systemInstruction}\n\nUser Request:\n${prompt}`
-            : prompt;
+        // Standard Chat Completion Payload
+        const messages: any[] = [];
+        
+        if (systemInstruction) {
+            messages.push({ role: "system", content: systemInstruction });
+        }
+
+        // Note: Image URLs are already enriched into the prompt text by the supervisor in cloudService.ts
+        // so we can use a simple text content approach or multi-part if strictly needed.
+        messages.push({ role: "user", content: prompt });
 
         const payload = {
-            model: model || "gpt-5.2",
-            input: fullInput,
-            temperature: 1.0,
-            store: true
+            model: model || "gpt-4o",
+            messages: messages,
+            temperature: 0.1,
+            max_tokens: 4096
         };
 
         const response = await fetch(`${PROXY_URL}${encodeURIComponent(OPENAI_URL)}`, {
@@ -55,30 +62,25 @@ export const openaiService = {
 
         const data = await response.json();
         
-        /**
-         * Parsing logic for specific /v1/responses format:
-         * data.output[0].content[0].text
-         */
-        let text = "";
-        try {
-            const output = data.output?.[0];
-            if (output && output.content && Array.isArray(output.content)) {
-                const contentPart = output.content.find((c: any) => c.type === 'output_text');
-                text = contentPart ? contentPart.text : output.content[0]?.text || "";
-            }
-        } catch (err) {
-            console.error("Failed to parse OpenAI response structure", err);
-            throw new Error("Invalid response structure from OpenAI v1/responses API");
-        }
+        // Parsing logic for Chat Completions
+        const text = data.choices?.[0]?.message?.content || "";
         
         // Usage extraction
         const usage = data.usage || {};
-        const inputTokens = usage.input_tokens || 0;
-        const outputTokens = usage.output_tokens || 0;
+        const inputTokens = usage.prompt_tokens || 0;
+        const outputTokens = usage.completion_tokens || 0;
 
-        // Pricing logic (approximate for gpt-5.2/4.1 based on tokens)
-        const inputPrice = 5.00; // $5 per 1M tokens
-        const outputPrice = 15.00; // $15 per 1M tokens
+        // Pricing logic (approximate for standard models)
+        let inputPrice = 2.50; 
+        let outputPrice = 10.00;
+        
+        if (model.includes('gpt-4o-mini')) {
+            inputPrice = 0.15;
+            outputPrice = 0.60;
+        } else if (model.includes('gpt-4o')) {
+            inputPrice = 5.00;
+            outputPrice = 15.00;
+        }
 
         const cost = ((inputTokens / 1_000_000) * inputPrice) + ((outputTokens / 1_000_000) * outputPrice);
 

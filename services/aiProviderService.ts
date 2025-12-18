@@ -26,8 +26,6 @@ const AVAILABLE_MODELS = {
         'gemini-1.5-flash'
     ],
     'openai': [
-        'gpt-5.2',
-        'gpt-4.1-2025-04-14',
         'gpt-4o',
         'gpt-4o-mini',
         'o1-preview',
@@ -47,7 +45,7 @@ const AVAILABLE_MODELS = {
 
 const DEFAULT_PROVIDERS: AIProviderConfig[] = [
     { id: 'google', name: 'Google Gemini', isActive: true, isFallback: false, model: 'gemini-2.5-flash', updatedAt: Date.now() },
-    { id: 'openai', name: 'OpenAI (ChatGPT)', isActive: false, isFallback: false, model: 'gpt-5.2', updatedAt: Date.now() },
+    { id: 'openai', name: 'OpenAI (ChatGPT)', isActive: false, isFallback: false, model: 'gpt-4o', updatedAt: Date.now() },
     { id: 'claude', name: 'Anthropic Claude', isActive: false, isFallback: false, model: 'claude-3-5-sonnet-20241022', updatedAt: Date.now() }
 ];
 
