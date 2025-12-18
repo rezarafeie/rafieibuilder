@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { User, Project, SystemLog, AdminMetric, FinancialStats, CreditLedgerEntry, WebhookLog, AIProviderConfig, AIProviderId } from '../types';
 import { cloudService, supabase } from '../services/cloudService';
@@ -77,7 +78,6 @@ const GenerationDetailsModal: React.FC<{ entry: CreditLedgerEntry; onClose: () =
     return (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center p-4 animate-in fade-in duration-300">
             <div className="bg-slate-900 border border-slate-700 w-full max-w-5xl h-[85vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden">
-                {/* Header */}
                 <div className="p-6 border-b border-slate-800 bg-slate-900/50 flex justify-between items-center">
                     <div className="flex items-center gap-4">
                         <div className="p-3 bg-indigo-500/10 rounded-2xl border border-indigo-500/20 text-indigo-400">
@@ -86,7 +86,7 @@ const GenerationDetailsModal: React.FC<{ entry: CreditLedgerEntry; onClose: () =
                         <div>
                             <h2 className="text-xl font-bold">Generation Inspector</h2>
                             <div className="flex items-center gap-2 mt-1">
-                                <span className="text-xs text-slate-500 font-mono">{entry.id}</span>
+                                <span className="text-xs text-slate-500 font-mono truncate max-w-[100px]">{entry.id}</span>
                                 <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded uppercase font-bold tracking-widest">{entry.model}</span>
                             </div>
                         </div>
@@ -94,16 +94,13 @@ const GenerationDetailsModal: React.FC<{ entry: CreditLedgerEntry; onClose: () =
                     <button onClick={onClose} className="p-2 hover:bg-slate-800 rounded-full text-slate-500 transition-colors"><X size={24}/></button>
                 </div>
 
-                {/* Body */}
-                <div className="flex-1 flex overflow-hidden">
-                    {/* Navigation */}
-                    <div className="w-52 border-r border-slate-800 p-4 space-y-2 shrink-0">
-                        <button onClick={() => setActiveTab('prompts')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-medium transition-all ${activeTab === 'prompts' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>Prompts</button>
-                        <button onClick={() => setActiveTab('response')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-medium transition-all ${activeTab === 'response' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>AI Response</button>
-                        <button onClick={() => setActiveTab('financials')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-medium transition-all ${activeTab === 'financials' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>Transaction Data</button>
+                <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+                    <div className="w-full md:w-52 border-b md:border-b-0 md:border-r border-slate-800 p-4 space-y-2 shrink-0 flex md:flex-col overflow-x-auto no-scrollbar">
+                        <button onClick={() => setActiveTab('prompts')} className={`whitespace-nowrap md:w-full text-left px-4 py-3 rounded-xl text-sm font-medium transition-all ${activeTab === 'prompts' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>Prompts</button>
+                        <button onClick={() => setActiveTab('response')} className={`whitespace-nowrap md:w-full text-left px-4 py-3 rounded-xl text-sm font-medium transition-all ${activeTab === 'response' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>AI Response</button>
+                        <button onClick={() => setActiveTab('financials')} className={`whitespace-nowrap md:w-full text-left px-4 py-3 rounded-xl text-sm font-medium transition-all ${activeTab === 'financials' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>Transaction Data</button>
                     </div>
 
-                    {/* Content Area */}
                     <div className="flex-1 overflow-y-auto p-6 bg-slate-950/50">
                         {activeTab === 'prompts' && (
                             <div className="space-y-8 animate-in slide-in-from-bottom-2">
@@ -148,7 +145,7 @@ const GenerationDetailsModal: React.FC<{ entry: CreditLedgerEntry; onClose: () =
 
                         {activeTab === 'financials' && (
                             <div className="space-y-6 animate-in slide-in-from-bottom-2">
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                                     <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800">
                                         <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Input Tokens</div>
                                         <div className="text-xl font-bold">{entry.inputTokens.toLocaleString()}</div>
@@ -172,7 +169,7 @@ const GenerationDetailsModal: React.FC<{ entry: CreditLedgerEntry; onClose: () =
                                     <div className="grid grid-cols-2 gap-y-4 text-sm">
                                         <div className="text-slate-500">Operation Type</div><div className="text-white font-mono">{entry.operationType}</div>
                                         <div className="text-slate-500">Timestamp</div><div className="text-white">{new Date(entry.createdAt).toLocaleString()}</div>
-                                        <div className="text-slate-500">Project ID</div><div className="text-indigo-400 font-mono flex items-center gap-2">{entry.projectId || 'N/A'} {entry.projectId && <ExternalLink size={12}/>}</div>
+                                        <div className="text-slate-500">Project ID</div><div className="text-indigo-400 font-mono flex items-center gap-2 truncate">{entry.projectId || 'N/A'}</div>
                                         <div className="text-slate-500">User ID</div><div className="text-slate-300 font-mono truncate">{entry.userId}</div>
                                         <div className="text-slate-500">Profit Margin</div><div className="text-slate-300">{entry.profitMargin}%</div>
                                     </div>
@@ -189,6 +186,8 @@ const GenerationDetailsModal: React.FC<{ entry: CreditLedgerEntry; onClose: () =
 const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
     const [view, setView] = useState<AdminView>('dashboard');
     const [aiSubView, setAiSubView] = useState<'config' | 'logs'>('config');
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+    
     const [projects, setProjects] = useState<Project[]>([]);
     const [allUsers, setAllUsers] = useState<any[]>([]);
     const [stats, setStats] = useState<AdminMetric[]>([]);
@@ -202,32 +201,33 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
     const [isSavingPrompts, setIsSavingPrompts] = useState(false);
     const [aiConfigs, setAiConfigs] = useState<AIProviderConfig[]>([]);
     
-    // Financials
-    const [financialStats, setFinancialStats] = useState<FinancialStats>({
+    const INITIAL_FINANCIAL_STATS: FinancialStats = {
         totalRevenueCredits: 0,
         totalCostUsd: 0,
         netProfitUsd: 0,
         totalCreditsPurchased: 0,
-        currentMargin: 0.5,
+        currentMargin: 50,
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalRequestCount: 0
-    });
+    };
+
+    const [financialStats, setFinancialStats] = useState<FinancialStats>(INITIAL_FINANCIAL_STATS);
     const [ledger, setLedger] = useState<CreditLedgerEntry[]>([]);
     const [selectedGeneration, setSelectedGeneration] = useState<CreditLedgerEntry | null>(null);
     
-    // Users
+    const [newMargin, setNewMargin] = useState('');
+    const [isUpdatingMargin, setIsUpdatingMargin] = useState(false);
+    
     const [targetUser, setTargetUser] = useState<any | null>(null);
     const [adjustmentAmount, setAdjustmentAmount] = useState('');
     const [adjustmentNote, setAdjustmentNote] = useState('');
     const [isAdjusting, setIsAdjusting] = useState(false);
     
-    // Webhooks
     const [webhookUrl, setWebhookUrl] = useState('');
     const [webhookLogs, setWebhookLogs] = useState<WebhookLog[]>([]);
     const [isSavingWebhook, setIsSavingWebhook] = useState(false);
 
-    // AI Editing
     const [editingProviderId, setEditingProviderId] = useState<AIProviderId | null>(null);
     const [tempApiKey, setTempApiKey] = useState('');
     const [tempModel, setTempModel] = useState('');
@@ -238,6 +238,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
     useEffect(() => {
         setCurrentPage(1);
         setDataError(null);
+        setIsSidebarOpen(false);
     }, [view, aiSubView]);
 
     useEffect(() => {
@@ -263,11 +264,23 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                 setLogs(data);
                 setTotalItems(count);
             } else if (view === 'financials') {
-                const fStats = await cloudService.getFinancialStats();
-                setFinancialStats(fStats);
-                const { data, count } = await cloudService.getLedger(currentPage, ITEMS_PER_PAGE);
-                setLedger(data);
-                setTotalItems(count);
+                try {
+                    const fStats = await cloudService.getFinancialStats();
+                    setFinancialStats(fStats || INITIAL_FINANCIAL_STATS);
+                    setNewMargin(fStats?.currentMargin?.toString() || '50');
+                } catch (fErr: any) {
+                    console.error("Financial stats fetch failed:", fErr);
+                    setDataError("Financial Stats RPC is missing. Please run the SQL Setup.");
+                    setFinancialStats(INITIAL_FINANCIAL_STATS);
+                }
+                
+                try {
+                    const { data, count } = await cloudService.getLedger(currentPage, ITEMS_PER_PAGE);
+                    setLedger(data);
+                    setTotalItems(count);
+                } catch (lErr) {
+                    setLedger([]);
+                }
             } else if (view === 'webhooks') {
                 const url = await cloudService.getSystemSetting('webhook_url');
                 if (url) setWebhookUrl(url);
@@ -308,8 +321,20 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                 { label: 'AI Success Rate', value: '94.2%', status: 'good' },
                 { label: 'Active Issues', value: errorCount || 0, status: errorCount && errorCount > 0 ? 'warning' : 'good' }
             ]);
-        } catch (e) {
-            // Stats load failure is non-fatal for UI
+        } catch (e) {}
+    };
+
+    const handleUpdateMargin = async () => {
+        if (!newMargin) return;
+        setIsUpdatingMargin(true);
+        try {
+            await cloudService.updateProfitMargin(parseFloat(newMargin));
+            alert("Margin updated successfully.");
+            await loadViewData();
+        } catch (e: any) {
+            alert("Failed to update margin: " + e.message);
+        } finally {
+            setIsUpdatingMargin(false);
         }
     };
 
@@ -363,16 +388,30 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
         }
     };
 
+    const navItems = [
+        { id: 'dashboard', label: 'Dashboard', icon: <Activity size={18} /> },
+        { id: 'financials', label: 'Financials & Credits', icon: <DollarSign size={18} /> },
+        { id: 'users', label: 'User Management', icon: <Users size={18} /> },
+        { id: 'projects', label: 'All Projects', icon: <Box size={18} /> },
+        { id: 'ai', label: 'AI Providers', icon: <Brain size={18} /> },
+        { id: 'webhooks', label: 'Webhooks', icon: <Radio size={18} /> },
+        { id: 'errors', label: 'Error Logs', icon: <AlertTriangle size={18} /> },
+        { id: 'settings', label: 'System Prompts', icon: <Settings size={18} /> }
+    ];
+
     return (
         <div className="fixed inset-0 bg-slate-950 text-white flex flex-col z-[60] font-sans">
             {selectedGeneration && <GenerationDetailsModal entry={selectedGeneration} onClose={() => setSelectedGeneration(null)} />}
             
             <header className="h-16 border-b border-slate-800 flex items-center justify-between px-6 bg-slate-900 shrink-0">
                 <div className="flex items-center gap-4">
-                    <Shield className="text-indigo-500" size={24} />
-                    <h1 className="font-bold text-xl tracking-tight">Admin Control Panel</h1>
+                    <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 -ml-2 text-slate-400 hover:text-white md:hidden transition-colors">
+                        <Menu size={24} />
+                    </button>
+                    <Shield className="text-indigo-500 hidden sm:block" size={24} />
+                    <h1 className="font-bold text-lg md:text-xl tracking-tight">Admin</h1>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1 sm:gap-3">
                     <button onClick={() => setShowSqlWizard(true)} className="p-2 text-slate-400 hover:text-white transition-colors" title="DB Setup">
                         <Database size={20} />
                     </button>
@@ -382,18 +421,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                 </div>
             </header>
 
-            <div className="flex-1 flex overflow-hidden">
-                <nav className="w-64 border-r border-slate-800 bg-slate-900/50 flex flex-col p-4 gap-2 shrink-0">
-                    {[
-                        { id: 'dashboard', label: 'Dashboard', icon: <Activity size={18} /> },
-                        { id: 'financials', label: 'Financials & Credits', icon: <DollarSign size={18} /> },
-                        { id: 'users', label: 'User Management', icon: <Users size={18} /> },
-                        { id: 'projects', label: 'All Projects', icon: <Box size={18} /> },
-                        { id: 'ai', label: 'AI Providers', icon: <Brain size={18} /> },
-                        { id: 'webhooks', label: 'Webhooks', icon: <Radio size={18} /> },
-                        { id: 'errors', label: 'Error Logs', icon: <AlertTriangle size={18} /> },
-                        { id: 'settings', label: 'System Prompts', icon: <Settings size={18} /> }
-                    ].map(item => (
+            <div className="flex-1 flex overflow-hidden relative">
+                <nav className={`
+                    absolute md:relative z-40 w-64 h-full border-r border-slate-800 bg-slate-900 flex flex-col p-4 gap-2 shrink-0 transition-transform duration-300
+                    ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+                `}>
+                    {navItems.map(item => (
                         <button
                             key={item.id}
                             onClick={() => setView(item.id as AdminView)}
@@ -407,7 +440,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                     ))}
                 </nav>
 
-                <main className="flex-1 overflow-y-auto p-8 relative">
+                {isSidebarOpen && (
+                    <div 
+                        className="fixed inset-0 bg-black/60 z-30 md:hidden animate-in fade-in"
+                        onClick={() => setIsSidebarOpen(false)}
+                    />
+                )}
+
+                <main className="flex-1 overflow-y-auto p-4 md:p-8 relative">
                     {isLoading && (
                         <div className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm z-50 flex items-center justify-center">
                             <Loader2 className="animate-spin text-indigo-500" size={48} />
@@ -423,7 +463,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
 
                     {view === 'dashboard' && (
                         <div className="space-y-8">
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
                                 {stats.map((s, i) => (
                                     <div key={i} className="bg-slate-900 border border-slate-800 p-6 rounded-2xl">
                                         <div className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">{s.label}</div>
@@ -433,7 +473,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                             </div>
                             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 flex flex-col items-center justify-center text-slate-500 h-64">
                                 <TrendingUp size={48} className="opacity-20 mb-4" />
-                                <p>Project Growth Charts arriving soon.</p>
+                                <p className="text-center">Analytics engine warming up...</p>
                             </div>
                         </div>
                     )}
@@ -444,10 +484,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                 <h3 className="font-bold">Project Directory</h3>
                             </div>
                             <div className="overflow-x-auto">
-                                <table className="w-full text-left text-sm">
+                                <table className="w-full text-left text-sm whitespace-nowrap md:whitespace-normal">
                                     <thead>
                                         <tr className="bg-slate-800/50 text-slate-400 border-b border-slate-800">
-                                            <th className="px-6 py-4">Project Name</th>
+                                            <th className="px-6 py-4">Project</th>
                                             <th className="px-6 py-4">Owner ID</th>
                                             <th className="px-6 py-4">Status</th>
                                             <th className="px-6 py-4">Created</th>
@@ -458,9 +498,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                             <tr key={p.id} className="hover:bg-slate-800/30">
                                                 <td className="px-6 py-4">
                                                     <div className="font-medium">{p.name}</div>
-                                                    <div className="text-[10px] text-slate-500 font-mono">{p.id}</div>
+                                                    <div className="text-[10px] text-slate-500 font-mono truncate max-w-[150px]">{p.id}</div>
                                                 </td>
-                                                <td className="px-6 py-4 text-xs text-slate-400 font-mono">{p.userId}</td>
+                                                <td className="px-6 py-4 text-xs text-slate-400 font-mono truncate max-w-[100px]">{p.userId}</td>
                                                 <td className="px-6 py-4">
                                                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${p.status === 'generating' ? 'bg-indigo-500/20 text-indigo-400' : p.status === 'failed' ? 'bg-red-500/20 text-red-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
                                                         {p.status}
@@ -478,14 +518,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
 
                     {view === 'financials' && (
                         <div className="space-y-8">
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
                                 <div className="bg-emerald-500/5 border border-emerald-500/20 p-6 rounded-2xl">
                                     <div className="flex justify-between items-start mb-4">
                                         <DollarSign className="text-emerald-500" size={24} />
                                         <TrendingUp className="text-emerald-500/50" size={16} />
                                     </div>
                                     <div className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-1">Est. Revenue</div>
-                                    <div className="text-3xl font-bold text-emerald-500">{(financialStats.totalRevenueCredits || 0).toFixed(2)} <span className="text-sm font-medium">Credits</span></div>
+                                    <div className="text-2xl md:text-3xl font-bold text-emerald-500">{(financialStats.totalRevenueCredits || 0).toFixed(2)} <span className="text-xs font-medium">Credits</span></div>
                                 </div>
                                 <div className="bg-red-500/5 border border-red-500/20 p-6 rounded-2xl">
                                     <div className="flex justify-between items-start mb-4">
@@ -493,25 +533,67 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                         <TrendingDown className="text-red-400/50" size={16} />
                                     </div>
                                     <div className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-1">Total API Cost</div>
-                                    <div className="text-3xl font-bold text-red-400">${(financialStats.totalCostUsd || 0).toFixed(4)} <span className="text-sm font-medium">USD</span></div>
+                                    <div className="text-2xl md:text-3xl font-bold text-red-400">${(financialStats.totalCostUsd || 0).toFixed(4)} <span className="text-xs font-medium">USD</span></div>
                                 </div>
                                 <div className="bg-indigo-500/5 border border-indigo-500/20 p-6 rounded-2xl">
                                     <div className="flex justify-between items-start mb-4">
                                         <Scale className="text-indigo-400" size={24} />
                                         <Check className="text-indigo-400/50" size={16} />
                                     </div>
-                                    <div className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-1">Current Margin</div>
-                                    <div className="text-3xl font-bold text-indigo-400">{(financialStats.currentMargin || 0).toFixed(1)}%</div>
+                                    <div className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-1">Net Profit</div>
+                                    <div className="text-2xl md:text-3xl font-bold text-indigo-400">${(financialStats.netProfitUsd || 0).toFixed(2)}</div>
+                                </div>
+                                <div className="bg-blue-500/5 border border-blue-500/20 p-6 rounded-2xl">
+                                    <div className="flex justify-between items-start mb-4">
+                                        <Activity className="text-blue-400" size={24} />
+                                        <Cpu className="text-blue-400/50" size={16} />
+                                    </div>
+                                    <div className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-1">Margin</div>
+                                    <div className="text-2xl md:text-3xl font-bold text-blue-400">{(financialStats.currentMargin || 0).toFixed(1)}%</div>
                                 </div>
                             </div>
 
+                            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+                                <h3 className="text-lg font-bold mb-4">Global Pricing Configuration</h3>
+                                <div className="flex flex-col sm:flex-row items-end sm:items-center gap-4">
+                                    <div className="flex-1 w-full">
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Profit Margin (%)</label>
+                                        <div className="relative">
+                                            <input 
+                                                type="number" 
+                                                step="0.1" 
+                                                value={newMargin} 
+                                                onChange={e => setNewMargin(e.target.value)}
+                                                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white focus:border-indigo-500 outline-none"
+                                            />
+                                            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">%</span>
+                                        </div>
+                                    </div>
+                                    <button 
+                                        onClick={handleUpdateMargin}
+                                        disabled={isUpdatingMargin || !newMargin}
+                                        className="h-[46px] w-full sm:w-auto px-6 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 disabled:opacity-50 transition-all"
+                                    >
+                                        {isUpdatingMargin ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+                                        Update Margin
+                                    </button>
+                                </div>
+                                <p className="text-xs text-slate-500 mt-3 flex items-center gap-1">
+                                    <AlertTriangle size={12} className="text-amber-500"/>
+                                    Changing this value immediately affects pricing for all new AI requests.
+                                </p>
+                            </div>
+
                             <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-                                <div className="p-4 bg-slate-900 border-b border-slate-800 flex justify-between items-center">
+                                <div className="p-4 bg-slate-900 border-b border-slate-800 flex flex-col sm:flex-row justify-between sm:items-center gap-2">
                                     <h3 className="font-bold">Transaction Ledger</h3>
-                                    <div className="text-xs text-slate-500">Total Tokens Processed: <span className="text-slate-300">{( (financialStats.totalInputTokens || 0) + (financialStats.totalOutputTokens || 0) ).toLocaleString()}</span></div>
+                                    <div className="text-[10px] md:text-xs text-slate-500">
+                                        Total Tokens: <span className="text-slate-300 font-mono">{( (financialStats.totalInputTokens || 0) + (financialStats.totalOutputTokens || 0) ).toLocaleString()}</span> | 
+                                        Requests: <span className="text-slate-300 font-mono">{(financialStats.totalRequestCount || 0).toLocaleString()}</span>
+                                    </div>
                                 </div>
                                 <div className="overflow-x-auto">
-                                    <table className="w-full text-left text-sm">
+                                    <table className="w-full text-left text-sm whitespace-nowrap">
                                         <thead>
                                             <tr className="bg-slate-800/50 text-slate-400 border-b border-slate-800">
                                                 <th className="px-6 py-4">Timestamp</th>
@@ -526,7 +608,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                             {ledger.map(entry => (
                                                 <tr key={entry.id} className="hover:bg-slate-800/30">
                                                     <td className="px-6 py-4 text-slate-500">{new Date(entry.createdAt).toLocaleString()}</td>
-                                                    <td className="px-6 py-4 text-slate-300 truncate max-w-[120px]">{entry.userId}</td>
+                                                    <td className="px-6 py-4 text-slate-300 truncate max-w-[100px]">{entry.userId}</td>
                                                     <td className="px-6 py-4 text-slate-400">{entry.model}</td>
                                                     <td className="px-6 py-4 text-slate-500">I:{entry.inputTokens} O:{entry.outputTokens}</td>
                                                     <td className="px-6 py-4 text-red-400/80">${(entry.rawCostUsd || 0).toFixed(5)}</td>
@@ -544,10 +626,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                     {view === 'ai' && (
                         <div className="space-y-6">
                             <div className="flex flex-col gap-2">
-                                <h2 className="text-2xl font-bold">AI Provider Center</h2>
+                                <h2 className="text-xl md:text-2xl font-bold">AI Provider Center</h2>
                                 <div className="flex gap-2 p-1 bg-slate-900 border border-slate-800 rounded-xl w-fit">
-                                    <button onClick={() => setAiSubView('config')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${aiSubView === 'config' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Provider Config</button>
-                                    <button onClick={() => setAiSubView('logs')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${aiSubView === 'logs' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Generation Logs</button>
+                                    <button onClick={() => setAiSubView('config')} className={`px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all ${aiSubView === 'config' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Provider Config</button>
+                                    <button onClick={() => setAiSubView('logs')} className={`px-4 py-1.5 rounded-lg text-[10px] md:text-xs font-bold transition-all ${aiSubView === 'logs' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Generation Logs</button>
                                 </div>
                             </div>
 
@@ -557,7 +639,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                         const isEditing = editingProviderId === config.id;
                                         return (
                                             <div key={config.id} className={`bg-slate-900 border rounded-2xl p-6 transition-all ${config.isActive ? 'border-indigo-500 ring-1 ring-indigo-500/50' : 'border-slate-800'}`}>
-                                                <div className="flex justify-between items-start mb-6">
+                                                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
                                                     <div className="flex items-center gap-4">
                                                         <div className={`p-3 rounded-xl ${config.isActive ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-400'}`}>
                                                             <Brain size={24} />
@@ -565,8 +647,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                                         <div>
                                                             <h3 className="text-lg font-bold">{config.name}</h3>
                                                             <div className="flex gap-2 mt-1">
-                                                                {config.isActive && <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded font-bold uppercase">Primary Active</span>}
-                                                                {config.isFallback && <span className="text-[10px] bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded font-bold uppercase">Fallback Mode</span>}
+                                                                {config.isActive && <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded font-bold uppercase">Primary</span>}
+                                                                {config.isFallback && <span className="text-[10px] bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded font-bold uppercase">Fallback</span>}
                                                             </div>
                                                         </div>
                                                     </div>
@@ -579,7 +661,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                                                 setTempApiKey('');
                                                             }
                                                         }}
-                                                        className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${isEditing ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-white hover:bg-slate-700'}`}
+                                                        className={`w-full sm:w-auto px-4 py-2 rounded-lg text-sm font-bold transition-all ${isEditing ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-white hover:bg-slate-700'}`}
                                                     >
                                                         {isSavingAI ? <Loader2 size={16} className="animate-spin" /> : isEditing ? 'Save Changes' : 'Edit Config'}
                                                     </button>
@@ -594,7 +676,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                                                 value={tempModel} 
                                                                 onChange={e => setTempModel(e.target.value)}
                                                                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm font-mono focus:border-indigo-500 outline-none"
-                                                                placeholder="e.g. gemini-2.5-flash"
+                                                                placeholder="e.g. gpt-5.2"
                                                             />
                                                         ) : (
                                                             <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm font-mono text-slate-300">{config.model}</div>
@@ -608,11 +690,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                                                 value={tempApiKey} 
                                                                 onChange={e => setTempApiKey(e.target.value)}
                                                                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm font-mono focus:border-indigo-500 outline-none"
-                                                                placeholder="Paste new key (leave empty to keep current)"
+                                                                placeholder="Paste new key"
                                                             />
                                                         ) : (
                                                             <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm font-mono text-slate-500 flex justify-between items-center">
-                                                                <span>••••••••••••••••••••••••</span>
+                                                                <span>••••••••••••••••</span>
                                                                 <Lock size={14} className="opacity-50" />
                                                             </div>
                                                         )}
@@ -620,18 +702,18 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                                 </div>
 
                                                 {isEditing && (
-                                                    <div className="mt-6 pt-6 border-t border-slate-800 flex gap-4">
+                                                    <div className="mt-6 pt-6 border-t border-slate-800 flex flex-col sm:flex-row gap-4">
                                                         <button 
                                                             onClick={() => handleSaveAI(config.id, true, false)}
-                                                            className="flex-1 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 p-3 rounded-xl text-xs font-bold transition-all"
+                                                            className="flex-1 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 p-3 rounded-xl text-[10px] font-bold transition-all uppercase"
                                                         >
-                                                            Set as Primary Active
+                                                            Set Primary
                                                         </button>
                                                         <button 
                                                             onClick={() => handleSaveAI(config.id, false, true)}
-                                                            className="flex-1 bg-amber-600/10 hover:bg-amber-600/20 text-amber-400 border border-amber-500/30 p-3 rounded-xl text-xs font-bold transition-all"
+                                                            className="flex-1 bg-amber-600/10 hover:bg-amber-600/20 text-amber-400 border border-amber-500/30 p-3 rounded-xl text-[10px] font-bold transition-all uppercase"
                                                         >
-                                                            Set as Fallback
+                                                            Set Fallback
                                                         </button>
                                                     </div>
                                                 )}
@@ -641,19 +723,19 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                 </div>
                             ) : (
                                 <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-2">
-                                    <div className="p-4 bg-slate-900 border-b border-slate-800 flex justify-between items-center">
-                                        <h3 className="font-bold">Historical Generation Logs</h3>
-                                        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Context Persisted for All Events</div>
+                                    <div className="p-4 bg-slate-900 border-b border-slate-800 flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+                                        <h3 className="font-bold">Generation Logs</h3>
+                                        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Full Context Audit</div>
                                     </div>
                                     <div className="overflow-x-auto">
-                                        <table className="w-full text-left text-sm">
+                                        <table className="w-full text-left text-sm whitespace-nowrap">
                                             <thead>
                                                 <tr className="bg-slate-800/50 text-slate-400 border-b border-slate-800">
                                                     <th className="px-6 py-4">Time</th>
                                                     <th className="px-6 py-4">Model</th>
                                                     <th className="px-6 py-4">Operation</th>
-                                                    <th className="px-6 py-4">Tokens (I/O)</th>
-                                                    <th className="px-6 py-4">Details</th>
+                                                    <th className="px-6 py-4">Tokens</th>
+                                                    <th className="px-6 py-4">Inspect</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-slate-800 font-mono text-[11px]">
@@ -670,7 +752,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                                                 onClick={() => setSelectedGeneration(entry)}
                                                                 className="flex items-center gap-2 bg-indigo-600/10 hover:bg-indigo-600 text-indigo-400 hover:text-white px-3 py-1.5 rounded-lg border border-indigo-500/20 transition-all font-bold text-[10px] uppercase"
                                                             >
-                                                                <Search size={12}/> Inspect
+                                                                <Search size={12}/> View
                                                             </button>
                                                         </td>
                                                     </tr>
@@ -687,8 +769,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                     {view === 'webhooks' && (
                         <div className="max-w-4xl space-y-8">
                             <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl">
-                                <h3 className="text-lg font-bold mb-4">Event Webhook Configuration</h3>
-                                <div className="flex gap-3">
+                                <h3 className="text-lg font-bold mb-4">Event Webhook</h3>
+                                <div className="flex flex-col sm:flex-row gap-3">
                                     <div className="relative flex-1">
                                         <Radio size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
                                         <input 
@@ -696,32 +778,31 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                             value={webhookUrl}
                                             onChange={e => setWebhookUrl(e.target.value)}
                                             className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-12 pr-4 py-3 text-sm font-mono focus:border-indigo-500 outline-none"
-                                            placeholder="https://hook.make.com/..."
+                                            placeholder="https://..."
                                         />
                                     </div>
                                     <button 
                                         onClick={handleSaveWebhook}
                                         disabled={isSavingWebhook}
-                                        className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all disabled:opacity-50"
+                                        className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all disabled:opacity-50"
                                     >
                                         {isSavingWebhook ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
                                         Save
                                     </button>
                                 </div>
-                                <p className="text-[10px] text-slate-500 mt-3 flex items-center gap-1.5 uppercase font-bold tracking-widest"><AlertTriangle size={12} className="text-amber-500" /> Events are fired for project creation, builds, and payments.</p>
                             </div>
 
                             <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
                                 <div className="p-4 bg-slate-900 border-b border-slate-800">
-                                    <h3 className="font-bold">Delivery Logs</h3>
+                                    <h3 className="font-bold">Webhook Logs</h3>
                                 </div>
                                 <div className="overflow-x-auto">
-                                    <table className="w-full text-left text-sm">
+                                    <table className="w-full text-left text-sm whitespace-nowrap">
                                         <thead>
                                             <tr className="bg-slate-800/50 text-slate-400 border-b border-slate-800">
                                                 <th className="px-6 py-4">Timestamp</th>
-                                                <th className="px-6 py-4">Event Type</th>
-                                                <th className="px-6 py-4">HTTP Status</th>
+                                                <th className="px-6 py-4">Event</th>
+                                                <th className="px-6 py-4">Status</th>
                                                 <th className="px-6 py-4">Response</th>
                                             </tr>
                                         </thead>
@@ -735,7 +816,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                                             {log.status_code}
                                                         </span>
                                                     </td>
-                                                    <td className="px-6 py-4 text-slate-400 truncate max-w-[200px]">{log.response_body}</td>
+                                                    <td className="px-6 py-4 text-slate-400 truncate max-w-[150px]">{log.response_body}</td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -749,16 +830,16 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                     {view === 'errors' && (
                         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col">
                             <div className="p-4 bg-slate-900 border-b border-slate-800">
-                                <h3 className="font-bold">Platform Error Audit</h3>
+                                <h3 className="font-bold">Error Audit</h3>
                             </div>
                             <div className="overflow-x-auto">
-                                <table className="w-full text-left text-sm">
+                                <table className="w-full text-left text-sm whitespace-nowrap">
                                     <thead>
                                         <tr className="bg-slate-800/50 text-slate-400 border-b border-slate-800">
                                             <th className="px-6 py-4">Level</th>
                                             <th className="px-6 py-4">Source</th>
                                             <th className="px-6 py-4">Message</th>
-                                            <th className="px-6 py-4">Timestamp</th>
+                                            <th className="px-6 py-4">Time</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-800 font-mono text-[11px]">
@@ -770,7 +851,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                                     </span>
                                                 </td>
                                                 <td className="px-6 py-4 text-slate-300">{log.source}</td>
-                                                <td className="px-6 py-4 text-slate-400 max-w-lg">{log.message}</td>
+                                                <td className="px-6 py-4 text-slate-400 max-w-xs truncate md:whitespace-normal">{log.message}</td>
                                                 <td className="px-6 py-4 text-slate-500">{new Date(log.timestamp).toLocaleString()}</td>
                                             </tr>
                                         ))}
@@ -783,13 +864,13 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
 
                     {view === 'users' && (
                         <div className="space-y-6">
-                            <div className="flex flex-col md:flex-row gap-6">
+                            <div className="flex flex-col lg:flex-row gap-6">
                                 <div className="flex-1 bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col">
                                     <div className="p-4 border-b border-slate-800 bg-slate-900">
-                                        <h3 className="font-bold">Managed Accounts</h3>
+                                        <h3 className="font-bold">Accounts</h3>
                                     </div>
                                     <div className="flex-1 overflow-x-auto">
-                                        <table className="w-full text-left text-sm">
+                                        <table className="w-full text-left text-sm whitespace-nowrap">
                                             <thead>
                                                 <tr className="bg-slate-800/50 text-slate-400 border-b border-slate-800">
                                                     <th className="px-6 py-4">User</th>
@@ -802,8 +883,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                                 {allUsers.map((u, i) => (
                                                     <tr key={i} className="hover:bg-slate-800/30 transition-colors">
                                                         <td className="px-6 py-4">
-                                                            <div className="font-medium text-white">{u.email}</div>
-                                                            <div className="text-[10px] text-slate-500 font-mono">{u.id}</div>
+                                                            <div className="font-medium text-white truncate max-w-[150px]">{u.email}</div>
+                                                            <div className="text-[10px] text-slate-500 font-mono truncate max-w-[100px]">{u.id}</div>
                                                         </td>
                                                         <td className="px-6 py-4 text-slate-300 text-center">{u.project_count || 0}</td>
                                                         <td className="px-6 py-4">
@@ -814,9 +895,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                                         <td className="px-6 py-4">
                                                             <button 
                                                                 onClick={() => setTargetUser(u)}
-                                                                className="text-indigo-400 hover:text-indigo-300 text-xs font-bold hover:underline"
+                                                                className="text-indigo-400 hover:text-indigo-300 text-[10px] font-bold uppercase hover:underline"
                                                             >
-                                                                Adjust Balance
+                                                                Adjust
                                                             </button>
                                                         </td>
                                                     </tr>
@@ -828,9 +909,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                 </div>
 
                                 {targetUser && (
-                                    <div className="w-full md:w-80 bg-indigo-950/20 border border-indigo-500/20 p-6 rounded-2xl h-fit sticky top-0 animate-in slide-in-from-right-4 duration-300">
+                                    <div className="w-full lg:w-80 bg-indigo-950/20 border border-indigo-500/20 p-6 rounded-2xl h-fit lg:sticky lg:top-0 animate-in slide-in-from-bottom-4 lg:slide-in-from-right-4 duration-300">
                                         <div className="flex justify-between items-start mb-6">
-                                            <h3 className="font-bold text-indigo-300">Modify Balance</h3>
+                                            <h3 className="font-bold text-indigo-300">Adjustment</h3>
                                             <button onClick={() => setTargetUser(null)}><X size={18} className="text-slate-500" /></button>
                                         </div>
                                         <div className="mb-4">
@@ -839,7 +920,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                         </div>
                                         <form onSubmit={handleAdjustCredits} className="space-y-4">
                                             <div>
-                                                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Delta Amount (+/-)</label>
+                                                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Delta Amount</label>
                                                 <input 
                                                     type="number" 
                                                     step="0.01" 
@@ -851,12 +932,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                                 />
                                             </div>
                                             <div>
-                                                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">System Note</label>
+                                                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Note</label>
                                                 <textarea 
                                                     value={adjustmentNote} 
                                                     onChange={e => setAdjustmentNote(e.target.value)}
                                                     className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs h-20 resize-none text-white"
-                                                    placeholder="Reason for adjustment..."
+                                                    placeholder="Reason..."
                                                 />
                                             </div>
                                             <button 
@@ -865,7 +946,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                                 className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-lg text-sm transition-all flex items-center justify-center gap-2"
                                             >
                                                 {isAdjusting ? <Loader2 className="animate-spin" size={16} /> : <Check size={16} />}
-                                                Confirm Update
+                                                Confirm
                                             </button>
                                         </form>
                                     </div>
@@ -876,10 +957,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
 
                     {view === 'settings' && (
                         <div className="max-w-4xl space-y-6">
-                            <div className="flex justify-between items-center mb-4">
+                            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-4">
                                 <div>
-                                    <h2 className="text-2xl font-bold">System Orchestration Prompts</h2>
-                                    <p className="text-slate-400 text-sm">Fine-tune the behavior of the Classifier, Designer, and Builder.</p>
+                                    <h2 className="text-xl md:text-2xl font-bold">System Prompts</h2>
+                                    <p className="text-slate-400 text-sm">Fine-tune the AI core behavior.</p>
                                 </div>
                                 <button 
                                     onClick={async () => {
@@ -888,14 +969,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                             for (const [key, value] of Object.entries(prompts)) {
                                                 await cloudService.setSystemSetting(key, String(value));
                                             }
-                                            alert("Global prompts updated.");
+                                            alert("Prompts updated.");
                                         } catch (err: unknown) {
                                             alert(getErrorMessage(err)); 
                                         }
                                         finally { setIsSavingPrompts(false); }
                                     }}
                                     disabled={isSavingPrompts}
-                                    className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-6 py-2.5 rounded-xl shadow-lg transition-all flex items-center gap-2 disabled:opacity-50"
+                                    className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-6 py-2.5 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                                 >
                                     {isSavingPrompts ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
                                     Save All
@@ -906,12 +987,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                     <div key={key} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
                                         <div className="px-6 py-3 bg-slate-900 border-b border-slate-800 flex justify-between items-center">
                                             <h4 className="text-xs font-bold text-indigo-400 uppercase tracking-widest">{key.replace('sys_prompt_', '').replace('_v12', '')}</h4>
-                                            <span className="text-[10px] text-slate-500 font-mono">{key}</span>
+                                            <span className="text-[10px] text-slate-500 font-mono hidden sm:inline">{key}</span>
                                         </div>
                                         <textarea
                                             value={String(value)}
                                             onChange={e => setPrompts({ ...prompts, [key]: e.target.value })}
-                                            className="w-full h-48 bg-transparent p-6 font-mono text-xs leading-relaxed text-slate-300 focus:outline-none resize-y"
+                                            className="w-full h-48 bg-transparent p-6 font-mono text-xs md:text-sm leading-relaxed text-slate-300 focus:outline-none resize-y"
                                         />
                                     </div>
                                 ))}

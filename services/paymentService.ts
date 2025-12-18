@@ -1,4 +1,3 @@
-
 import { createClient } from '@supabase/supabase-js';
 import { ExchangeRateData } from '../types';
 import { webhookService } from './webhookService';
@@ -18,6 +17,9 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Zarinpal Merchant ID
 const ZARINPAL_MERCHANT_ID = 'd88e96b3-4dcb-4af9-a9d1-9d8755a37a91'; 
+
+// Stripe Secret Key (Test Mode) - REPLACE WITH YOUR OWN KEY
+const STRIPE_SECRET_KEY = 'sk_test_placeholder'; 
 
 const TETHERLAND_API_KEY = 'HMcNhotoQfk9d4mWipfQMa54axNogCmpVyWTgWZp';
 
@@ -142,8 +144,6 @@ export const paymentService = {
         const tomanRate = await this.getUsdToIrrRate();
         
         // Calculate Toman Amount based on 1 USD = 10 Credits
-        // amountCredits = 10 -> needs 1 USD -> tomanRate * 1
-        // amountCredits = 1 -> needs 0.1 USD -> tomanRate * 0.1
         const amountToman = Math.ceil(amountCredits * (tomanRate / CREDITS_PER_USD));
         const amountRial = amountToman * 10; // Zarinpal requires Rial
 
@@ -192,19 +192,15 @@ export const paymentService = {
                 currency: 'IRR',
                 gateway: 'Zarinpal',
                 authority: json.data.authority
-            }, {}, { id: 'pending', email: userEmail }); // Can't easily get ID here, email suffices
+            }, {}, { id: 'pending', email: userEmail }); 
 
             return `https://payment.zarinpal.com/pg/StartPay/${json.data.authority}`;
         } else {
-            // Safer Error Handling
             let errorMsg = 'Unknown Zarinpal error';
-            
-            // Check if errors is an array before mapping
             if (json.errors) {
                 if (Array.isArray(json.errors)) {
                     errorMsg = json.errors.map((e: any) => e.message || JSON.stringify(e)).join(', ');
                 } else if (typeof json.errors === 'object') {
-                    // It might be an object like { code: -9, message: "..." }
                     errorMsg = json.errors.message || JSON.stringify(json.errors);
                 } else {
                     errorMsg = String(json.errors);
@@ -217,6 +213,72 @@ export const paymentService = {
 
             throw new Error(`Zarinpal Error: ${errorMsg}`);
         }
+    },
+
+    /**
+     * Initiates a Stripe Checkout Session.
+     */
+    async requestStripePayment(amountCredits: number, userEmail: string): Promise<string> {
+        if (STRIPE_SECRET_KEY === 'sk_test_placeholder') {
+            throw new Error("Stripe is not configured. Please set a valid Secret Key in paymentService.ts");
+        }
+
+        // 1 USD = 10 Credits
+        // Amount in Cents = (amountCredits / 10) * 100 = amountCredits * 10
+        const amountCents = Math.floor(amountCredits * 10);
+        
+        // Minimum Stripe amount is usually 50 cents -> 5 credits
+        if (amountCents < 50) {
+            throw new Error("Minimum purchase for Stripe is 5 Credits ($0.50).");
+        }
+
+        // Construct URLs manually to avoid URL constructor issues in some envs
+        const baseUrl = window.location.href.split('#')[0];
+        const callbackPath = '#/payment/verify';
+        const successUrl = `${baseUrl}${callbackPath}?session_id={CHECKOUT_SESSION_ID}&gateway=stripe`;
+        const cancelUrl = `${baseUrl}${callbackPath}?status=canceled&gateway=stripe`;
+        
+        const params = new URLSearchParams();
+        params.append('success_url', successUrl);
+        params.append('cancel_url', cancelUrl);
+        params.append('payment_method_types[]', 'card');
+        params.append('line_items[0][price_data][currency]', 'usd');
+        params.append('line_items[0][price_data][product_data][name]', `${amountCredits} AI Credits`);
+        params.append('line_items[0][price_data][unit_amount]', amountCents.toString());
+        params.append('line_items[0][quantity]', '1');
+        params.append('mode', 'payment');
+        if (userEmail) params.append('customer_email', userEmail);
+
+        // Call Stripe API directly (Client-side key usage is insecure for production, but standard for this 'builder' architecture request)
+        const res = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${STRIPE_SECRET_KEY}`,
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: params
+        });
+
+        const json = await res.json();
+        
+        if (!res.ok) {
+            throw new Error(json.error?.message || "Stripe Session Creation Failed");
+        }
+
+        // Store meta for verification
+        localStorage.setItem(`stripe_pending_${json.id}`, JSON.stringify({
+            amountCredits,
+            timestamp: Date.now()
+        }));
+        
+        webhookService.send('credit.purchase_started', {
+            amount: amountCredits,
+            currency: 'USD',
+            gateway: 'Stripe',
+            session_id: json.id
+        }, {}, { id: 'pending', email: userEmail });
+
+        return json.url;
     },
 
     /**
@@ -269,9 +331,61 @@ export const paymentService = {
                 return { success: false, message: `Verification Failed: Code ${json.data?.code}` };
             }
         } catch (e: unknown) {
-            // Safely extract message from unknown error
             const errorMessage = e instanceof Error ? e.message : String(e);
             return { success: false, message: errorMessage || "Verification network error" };
+        }
+    },
+
+    /**
+     * Verifies a Stripe payment after callback.
+     */
+    async verifyStripePayment(sessionId: string): Promise<{ success: boolean; message: string }> {
+        if (STRIPE_SECRET_KEY === 'sk_test_placeholder') {
+             return { success: false, message: "Stripe configuration missing." };
+        }
+
+        try {
+            const res = await fetch(`https://api.stripe.com/v1/checkout/sessions/${sessionId}`, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${STRIPE_SECRET_KEY}`,
+                }
+            });
+
+            const session = await res.json();
+
+            if (session.payment_status === 'paid') {
+                const pendingJson = localStorage.getItem(`stripe_pending_${sessionId}`);
+                
+                // Fallback amount calc if local storage missing (e.g. cross-device)
+                let amountCredits = 0;
+                if (pendingJson) {
+                    amountCredits = JSON.parse(pendingJson).amountCredits;
+                } else if (session.amount_total) {
+                    // Logic: 1 USD = 10 Credits. 
+                    // Session Amount is in cents. 100 cents = 1 USD = 10 Credits.
+                    // Credits = (Cents / 100) * 10 = Cents / 10.
+                    amountCredits = session.amount_total / 10; 
+                }
+
+                const { data: { user } } = await (supabase.auth as any).getUser();
+                if (!user) throw new Error("User not authenticated");
+
+                await this.finalizePayment(user.id, {
+                    amount: amountCredits,
+                    currency: session.currency?.toUpperCase() || 'USD',
+                    exchangeRate: 1.0, // Base currency
+                    gateway: 'Stripe',
+                    paymentId: session.payment_intent || session.id
+                });
+
+                localStorage.removeItem(`stripe_pending_${sessionId}`);
+                return { success: true, message: "Payment Verified Successfully!" };
+            } else {
+                return { success: false, message: `Payment status: ${session.payment_status}` };
+            }
+        } catch (e: any) {
+            return { success: false, message: e.message || "Stripe verification failed" };
         }
     },
 

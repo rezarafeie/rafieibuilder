@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Project, Message, ViewMode, User, Suggestion, BuildState, VercelConfig } from '../types';
@@ -147,6 +148,10 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       }
       if (project && (!project.code.html && !project.files?.length)) return;
       if (isFirstGeneration) return;
+      
+      // Filter out generic "Script error." which is often noise (CORS errors without details)
+      if (error && error.trim() === 'Script error.') return;
+
       setRuntimeError(error);
   };
 
@@ -810,7 +815,8 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                             files={project.files}
                             isGenerating={isThinking}
                             isUpdating={isUpdating}
-                            onRuntimeError={handleRuntimeError} 
+                            onRuntimeError={handleRuntimeError}
+                            onSuccess={() => setRuntimeError(null)}
                             projectId={project.id}
                             active={!isMobile || mobileTab === 'preview'}
                             externalUrl={previewUrl}

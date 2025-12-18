@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { paymentService } from '../services/paymentService';
@@ -12,6 +11,43 @@ const PaymentCallback: React.FC = () => {
 
     useEffect(() => {
         const verify = async () => {
+            // Check Gateway params
+            const gateway = searchParams.get('gateway');
+            
+            // --- STRIPE LOGIC ---
+            if (gateway === 'stripe') {
+                const sessionId = searchParams.get('session_id');
+                const cancelStatus = searchParams.get('status');
+
+                if (cancelStatus === 'canceled') {
+                    setStatus('failed');
+                    setMessage("Payment was canceled by user.");
+                    return;
+                }
+
+                if (!sessionId) {
+                    setStatus('failed');
+                    setMessage("Invalid Stripe session ID.");
+                    return;
+                }
+
+                try {
+                    const result = await paymentService.verifyStripePayment(sessionId);
+                    if (result.success) {
+                        setStatus('success');
+                        setMessage(result.message);
+                    } else {
+                        setStatus('failed');
+                        setMessage(result.message);
+                    }
+                } catch (e: any) {
+                    setStatus('failed');
+                    setMessage(e.message);
+                }
+                return;
+            }
+
+            // --- ZARINPAL LOGIC (Default/Fallback) ---
             const authority = searchParams.get('Authority');
             const statusParam = searchParams.get('Status');
 
@@ -32,7 +68,6 @@ const PaymentCallback: React.FC = () => {
                 if (result.success) {
                     setStatus('success');
                     setMessage(result.message);
-                    // Refresh user data (handled by App.tsx logic on reload or nav)
                 } else {
                     setStatus('failed');
                     setMessage(result.message);

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { User, CreditTransaction } from '../types';
 import { cloudService } from '../services/cloudService';
@@ -67,9 +66,9 @@ const CreditBalanceModal: React.FC<CreditBalanceModalProps> = ({ user, onClose }
                 const url = await paymentService.requestZarinpalPayment(amount, user.email, ''); 
                 window.location.href = url; 
             } else {
-                alert("Stripe payments are currently disabled in this demo environment. Please use Zarinpal or contact support.");
-                setIsProcessing(false);
-                return;
+                // Call Stripe Implementation
+                const url = await paymentService.requestStripePayment(amount, user.email);
+                window.location.href = url;
             }
         } catch (e: any) {
             setPurchaseError(e.message);

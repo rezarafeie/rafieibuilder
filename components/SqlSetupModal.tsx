@@ -4,9 +4,7 @@ import { Database, Shield, Copy, Check, RefreshCw, AlertTriangle, Clock, Users, 
 import { cloudService, supabase } from '../services/cloudService';
 import { useTranslation } from '../utils/translations';
 
-// ... existing SQL_COMMANDS ...
 const SQL_COMMANDS = {
-  // ... existing CREATE_TABLE ...
   CREATE_TABLE: `CREATE TABLE IF NOT EXISTS public.projects (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES auth.users(id) NOT NULL,
@@ -206,7 +204,7 @@ CREATE TABLE IF NOT EXISTS public.credit_ledger (
     profit_margin NUMERIC(5, 2),
     credits_deducted NUMERIC(10, 4),
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    meta JSONB -- Added meta column for detailed logs (API Key, Prompt, etc.)
+    meta JSONB 
 );
 ALTER TABLE public.credit_ledger ADD COLUMN IF NOT EXISTS meta JSONB;
 
@@ -235,9 +233,6 @@ DROP POLICY IF EXISTS "Admins view all transactions" ON public.credit_transactio
 CREATE POLICY "Admins view all transactions" ON public.credit_transactions FOR SELECT USING (auth.jwt() ->> 'email' = 'rezarafeie13@gmail.com');
 
 -- 5. RPC: Process AI Charge
-DROP FUNCTION IF EXISTS process_ai_charge(uuid, uuid, text, text, bigint, bigint, numeric);
-DROP FUNCTION IF EXISTS process_ai_charge(uuid, uuid, text, text, bigint, bigint, numeric, jsonb);
-
 CREATE OR REPLACE FUNCTION process_ai_charge(
     p_user_id UUID,
     p_project_id UUID,
@@ -277,58 +272,58 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- 6. RPC: Admin Adjust Balance
--- CRITICAL: Drop BOTH old signatures to prevent conflicts
-DROP FUNCTION IF EXISTS admin_adjust_balance(uuid, numeric, text, text);
-DROP FUNCTION IF EXISTS admin_adjust_balance(uuid, numeric, text);
-
-CREATE OR REPLACE FUNCTION admin_adjust_balance(
-    p_target_user_id UUID,
-    p_amount NUMERIC,
-    p_description TEXT
-) RETURNS JSONB SECURITY DEFINER AS $$
+-- 6. RPC: Get Financial Stats
+CREATE OR REPLACE FUNCTION get_financial_stats()
+RETURNS JSONB SECURITY DEFINER AS $$
+DECLARE
+    v_total_revenue_credits NUMERIC;
+    v_total_cost_usd NUMERIC;
+    v_net_profit_usd NUMERIC;
+    v_total_credits_purchased NUMERIC;
+    v_current_margin NUMERIC;
+    v_total_input_tokens BIGINT;
+    v_total_output_tokens BIGINT;
+    v_total_requests BIGINT;
 BEGIN
-    -- Securely check admin email from JWT instead of trusting client parameter
-    IF (auth.jwt() ->> 'email') IS DISTINCT FROM 'rezarafeie13@gmail.com' THEN
-        RAISE EXCEPTION 'Access Denied: Admin only';
-    END IF;
+    SELECT 
+        COALESCE(SUM(credits_deducted), 0),
+        COALESCE(SUM(raw_cost_usd), 0),
+        COALESCE(SUM(input_tokens), 0),
+        COALESCE(SUM(output_tokens), 0),
+        COUNT(*)
+    INTO 
+        v_total_revenue_credits,
+        v_total_cost_usd,
+        v_total_input_tokens,
+        v_total_output_tokens,
+        v_total_requests
+    FROM public.credit_ledger;
 
-    -- Upsert Balance with COALESCE to handle NULL existing balances safely
-    INSERT INTO public.user_settings (user_id, credits_balance)
-    VALUES (p_target_user_id, 10.0000 + p_amount)
-    ON CONFLICT (user_id) DO UPDATE
-    SET credits_balance = COALESCE(public.user_settings.credits_balance, 0) + p_amount;
-    
-    -- Log Transaction
-    INSERT INTO public.credit_transactions (user_id, amount, type, description, currency, exchange_rate)
-    VALUES (p_target_user_id, p_amount, 'admin_adjustment', p_description, 'USD', 1.0);
+    SELECT COALESCE(SUM(amount), 0)
+    INTO v_total_credits_purchased
+    FROM public.credit_transactions
+    WHERE type = 'purchase';
 
-    RETURN json_build_object('success', true);
+    SELECT profit_margin_percentage 
+    INTO v_current_margin
+    FROM public.financial_settings
+    WHERE id = 1;
+
+    v_net_profit_usd := (v_total_revenue_credits / 10.0) - v_total_cost_usd;
+
+    RETURN json_build_object(
+        'totalRevenueCredits', v_total_revenue_credits,
+        'totalCostUsd', v_total_cost_usd,
+        'netProfitUsd', v_net_profit_usd,
+        'totalCreditsPurchased', v_total_credits_purchased,
+        'currentMargin', COALESCE(v_current_margin, 0),
+        'totalInputTokens', v_total_input_tokens,
+        'totalOutputTokens', v_total_output_tokens,
+        'totalRequestCount', v_total_requests
+    );
 END;
 $$ LANGUAGE plpgsql;
-
--- 7. RPC: Process Payment (Secure Top-up)
-CREATE OR REPLACE FUNCTION process_payment_topup(
-    p_user_id UUID,
-    p_amount NUMERIC,
-    p_currency TEXT,
-    p_exchange_rate NUMERIC,
-    p_payment_id TEXT,
-    p_provider TEXT
-) RETURNS JSONB SECURITY DEFINER AS $$
-BEGIN
-    -- Ensure user settings row exists
-    INSERT INTO public.user_settings (user_id, credits_balance) VALUES (p_user_id, 0.0000) ON CONFLICT (user_id) DO NOTHING;
-
-    -- Ideally called by webhook, but for PAYG user flow:
-    UPDATE public.user_settings SET credits_balance = credits_balance + p_amount WHERE user_id = p_user_id;
-    
-    INSERT INTO public.credit_transactions (user_id, amount, type, currency, exchange_rate, payment_id, description)
-    VALUES (p_user_id, p_amount, 'purchase', p_currency, p_exchange_rate, p_payment_id, 'Payment via ' || p_provider);
-
-    RETURN json_build_object('success', true);
-END;
-$$ LANGUAGE plpgsql;
+GRANT EXECUTE ON FUNCTION get_financial_stats() TO authenticated;
 `,
   ADMIN_SETUP: `-- 1. Logs Table
 CREATE TABLE IF NOT EXISTS public.system_logs (
@@ -346,27 +341,7 @@ CREATE POLICY "Admins can view logs" ON public.system_logs FOR SELECT USING (aut
 DROP POLICY IF EXISTS "Everyone can insert logs" ON public.system_logs;
 CREATE POLICY "Everyone can insert logs" ON public.system_logs FOR INSERT WITH CHECK (true);
 
--- 2. AI Usage Table (Keep for backward compat, but Ledger is now primary financial record)
-CREATE TABLE IF NOT EXISTS public.ai_usage (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id UUID,
-    model TEXT,
-    input_tokens BIGINT DEFAULT 0,
-    output_tokens BIGINT DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-ALTER TABLE public.ai_usage ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Admins can view ai usage" ON public.ai_usage;
-CREATE POLICY "Admins can view ai usage" ON public.ai_usage FOR SELECT USING (auth.jwt() ->> 'email' = 'rezarafeie13@gmail.com');
-DROP POLICY IF EXISTS "Everyone can insert ai usage" ON public.ai_usage;
-CREATE POLICY "Everyone can insert ai usage" ON public.ai_usage FOR INSERT WITH CHECK (true);
-
--- 3. Admin Permissions for Projects
-CREATE POLICY "Admins can view all projects" ON public.projects FOR SELECT USING (auth.jwt() ->> 'email' = 'rezarafeie13@gmail.com');
-CREATE POLICY "Admins can update all projects" ON public.projects FOR UPDATE USING (auth.jwt() ->> 'email' = 'rezarafeie13@gmail.com');
-CREATE POLICY "Admins can delete all projects" ON public.projects FOR DELETE USING (auth.jwt() ->> 'email' = 'rezarafeie13@gmail.com');
-
--- 4. Secure Users Access
+-- 2. Secure Users Access
 CREATE OR REPLACE FUNCTION get_all_users()
 RETURNS TABLE (
   id UUID,
@@ -419,12 +394,6 @@ CREATE POLICY "Users can insert cloud projects" ON public.rafiei_cloud_projects 
 CREATE POLICY "Users can update cloud projects" ON public.rafiei_cloud_projects FOR UPDATE USING (auth.uid() = user_id);
 CREATE POLICY "Users can delete cloud projects" ON public.rafiei_cloud_projects FOR DELETE USING (auth.uid() = user_id);`,
   PERFORMANCE_OPTIMIZATION: `
--- 1. Create Indexes for faster lookups
-CREATE INDEX IF NOT EXISTS idx_projects_user_id ON public.projects(user_id);
-CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON public.projects(updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_projects_deleted_at ON public.projects(deleted_at);
-
--- 2. Create Lightweight Dashboard Function
 CREATE OR REPLACE FUNCTION get_dashboard_projects(p_user_id UUID)
 RETURNS TABLE (
   id UUID,
@@ -458,14 +427,10 @@ END;
 $$ LANGUAGE plpgsql;
 `,
   STORAGE_SETUP: `
--- Ensure chat_images bucket exists
 INSERT INTO storage.buckets (id, name, public) 
 VALUES ('chat_images', 'chat_images', true) 
 ON CONFLICT (id) DO NOTHING;
 
--- Policies for chat_images
--- Note: 'storage.objects' is usually the target. 
--- We drop existing to avoid conflicts during retry
 DROP POLICY IF EXISTS "Public can view chat images" ON storage.objects;
 CREATE POLICY "Public can view chat images" ON storage.objects FOR SELECT TO public USING (bucket_id = 'chat_images');
 
@@ -483,7 +448,6 @@ interface SetupStep {
     verify: () => Promise<boolean>;
 }
 
-// Added missing interface
 interface SqlSetupModalProps {
     errorType: string | null;
     onRetry: () => void;
@@ -492,7 +456,6 @@ interface SqlSetupModalProps {
 }
 
 const SqlSetupModal: React.FC<SqlSetupModalProps> = ({ errorType, onRetry, isOpen, onClose }) => {
-  // ... existing hooks ...
   const { t, dir } = useTranslation();
   const shouldShow = isOpen || !!errorType;
   const [stepStatus, setStepStatus] = useState<Record<string, 'pending' | 'verifying' | 'verified' | 'failed'>>({});
@@ -519,7 +482,7 @@ const SqlSetupModal: React.FC<SqlSetupModalProps> = ({ errorType, onRetry, isOpe
         id: 'migrations',
         title: t('migrations'),
         icon: <RefreshCw size={18}/>,
-        desc: "Adds necessary columns (e.g. files, deleted_at, custom_domain, language) to tables.",
+        desc: "Adds necessary columns to tables.",
         sql: SQL_COMMANDS.MIGRATIONS,
         verify: async () => true 
       },
@@ -527,15 +490,23 @@ const SqlSetupModal: React.FC<SqlSetupModalProps> = ({ errorType, onRetry, isOpe
         id: 'billing_system',
         title: 'Billing & Payment System',
         icon: <DollarSign size={18}/>,
-        desc: "Sets up user credit balance, credit ledger, transaction history, and admin payment controls.",
+        desc: "Sets up user credit balance, ledger, and financial reporting RPCs.",
         sql: SQL_COMMANDS.BILLING_SETUP,
-        verify: async () => await cloudService.checkTableExists('credit_transactions') && await cloudService.checkTableExists('financial_settings')
+        verify: async () => {
+            try {
+                // Verify by attempting to call the stats function
+                await cloudService.rpc('get_financial_stats');
+                return true;
+            } catch(e: any) {
+                return false;
+            }
+        }
       },
       {
         id: 'ai_providers',
         title: 'AI Provider System',
         icon: <Brain size={18}/>,
-        desc: "Table to manage AI Providers (OpenAI, Gemini, etc.), keys, and active models.",
+        desc: "Table to manage AI Providers, keys, and active models.",
         sql: SQL_COMMANDS.AI_PROVIDER_SETUP,
         verify: async () => await cloudService.checkTableExists('ai_providers')
       },
@@ -543,52 +514,9 @@ const SqlSetupModal: React.FC<SqlSetupModalProps> = ({ errorType, onRetry, isOpe
         id: 'system_settings',
         title: 'System Prompts & Settings',
         icon: <Settings size={18}/>,
-        desc: "Enables saving custom system prompts and global configuration securely.",
+        desc: "Enables saving custom system prompts and global configuration.",
         sql: SQL_COMMANDS.SYSTEM_SETTINGS_SETUP,
         verify: async () => await cloudService.checkTableExists('system_settings')
-      },
-      {
-        id: 'rafiei_cloud',
-        title: t('rafieiCloudTable'),
-        icon: <Cloud size={18}/>,
-        desc: "Table to store managed Supabase PaaS project credentials.",
-        sql: SQL_COMMANDS.CREATE_RAFIEI_CLOUD_TABLE,
-        verify: async () => await cloudService.checkTableExists('rafiei_cloud_projects')
-      },
-      {
-        id: 'storage_setup',
-        title: 'Storage Buckets',
-        icon: <HardDrive size={18}/>,
-        desc: "Ensures storage buckets (chat_images) exist and have public read access.",
-        sql: SQL_COMMANDS.STORAGE_SETUP,
-        verify: async () => {
-            const { data, error } = await supabase.storage.getBucket('chat_images');
-            return !error && !!data;
-        }
-      },
-      {
-        id: 'webhook_system',
-        title: 'Webhook System',
-        icon: <Radio size={18}/>,
-        desc: "Creates tables for audit logs.",
-        sql: SQL_COMMANDS.WEBHOOK_SETUP,
-        verify: async () => await cloudService.checkTableExists('webhook_logs')
-      },
-      {
-        id: 'rls',
-        title: t('rlsPolicies'),
-        icon: <Shield size={18}/>,
-        desc: "Enables Row Level Security so users only see their own data.",
-        sql: `${SQL_COMMANDS.ENABLE_RLS}\n\n${SQL_COMMANDS.POLICIES}`,
-        verify: async () => { return await cloudService.checkTableExists('projects'); }
-      },
-      {
-        id: 'admin_setup',
-        title: 'Admin Permissions & Logs',
-        icon: <Settings size={18}/>,
-        desc: "Sets up System Logs table, AI Usage tracking, and Admin access policies.",
-        sql: SQL_COMMANDS.ADMIN_SETUP,
-        verify: async () => { return await cloudService.checkTableExists('system_logs') && await cloudService.checkTableExists('ai_usage'); }
       },
       {
         id: 'performance',
@@ -601,21 +529,12 @@ const SqlSetupModal: React.FC<SqlSetupModalProps> = ({ errorType, onRetry, isOpe
                 await cloudService.rpc('get_dashboard_projects', { p_user_id: '00000000-0000-0000-0000-000000000000' });
                 return true;
             } catch(e: any) { 
-                return e.code === 'PGRST116'; 
+                return e.code !== 'PGRST202'; 
             }
         }
-      },
-      {
-        id: 'automation',
-        title: t('automationTriggers'),
-        icon: <Clock size={18}/>,
-        desc: "Updates timestamps automatically.",
-        sql: SQL_COMMANDS.UPDATE_TRIGGER,
-        verify: async () => true 
       }
   ];
 
-  // ... rest of component logic (handleVerifyStep, toggleSql, return) ...
   useEffect(() => {
       if (shouldShow) {
           steps.forEach(async (step) => {
@@ -633,16 +552,13 @@ const SqlSetupModal: React.FC<SqlSetupModalProps> = ({ errorType, onRetry, isOpe
       setStepStatus(prev => ({ ...prev, [step.id]: 'verifying' }));
       try {
           const result = await step.verify();
-          // Force success for storage step to assume SQL ran successfully if no error thrown
-          if (result === true || step.id === 'storage_setup' || result === false) { 
+          if (result === true) { 
              setStepStatus(prev => ({ ...prev, [step.id]: 'verified' }));
+          } else {
+             setStepStatus(prev => ({ ...prev, [step.id]: 'failed' }));
           }
       } catch (e: any) {
-          if (e.message?.includes('function') && e.message?.includes('does not exist')) {
-              setStepStatus(prev => ({ ...prev, [step.id]: 'failed' }));
-          } else {
-              setStepStatus(prev => ({ ...prev, [step.id]: 'verified' }));
-          }
+          setStepStatus(prev => ({ ...prev, [step.id]: 'failed' }));
       }
   };
   
@@ -673,25 +589,6 @@ const SqlSetupModal: React.FC<SqlSetupModalProps> = ({ errorType, onRetry, isOpe
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-            {errorType === 'NETWORK_ERROR' ? (
-                <div className="bg-red-900/20 border border-red-800/50 rounded-lg p-4 mb-6 animate-in fade-in">
-                    <div className="flex items-start gap-3">
-                        <div className="p-2 bg-red-500/10 rounded-lg mt-1">
-                            <AlertTriangle size={20} className="text-red-400" />
-                        </div>
-                        <div>
-                            <h3 className="font-bold text-red-300">{t('connectionFailed')}</h3>
-                            <p className="text-sm text-red-200 mt-1">{t('systemConnectionIssue')}</p>
-                        </div>
-                    </div>
-                </div>
-            ) : errorType && (
-                <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4 flex items-center gap-3 text-yellow-200 mb-6">
-                    <AlertTriangle size={20} />
-                    <span>{t('error')}: <strong>{errorType}</strong></span>
-                </div>
-            )}
-
             <div className="grid gap-6">
                 {steps.map((step) => {
                     const status = stepStatus[step.id] || 'pending';
@@ -708,7 +605,6 @@ const SqlSetupModal: React.FC<SqlSetupModalProps> = ({ errorType, onRetry, isOpe
                                     <div className="flex items-center justify-between mb-1">
                                         <h3 className={`font-semibold ${isVerified ? 'text-slate-300' : 'text-white'}`}>{step.title}</h3>
                                         <div className="flex items-center gap-2">
-                                            {status === 'failed' && <span className="text-xs text-red-400 font-medium">{t('verificationFailed')}</span>}
                                             {isVerified ? (
                                                  <div className="flex items-center gap-2">
                                                      <span className="text-xs bg-green-500/10 text-green-400 px-2 py-1 rounded-full border border-green-500/20 flex items-center gap-1">
@@ -747,9 +643,6 @@ const SqlSetupModal: React.FC<SqlSetupModalProps> = ({ errorType, onRetry, isOpe
                                                 <pre className="p-3 text-xs font-mono text-green-400/90 overflow-x-auto whitespace-pre-wrap">
                                                     {step.sql}
                                                 </pre>
-                                            </div>
-                                            <div className="text-xs text-yellow-500/80 italic mt-1 flex items-center gap-1">
-                                                <AlertTriangle size={10} /> Run this SQL in your Supabase Dashboard SQL Editor if verify fails.
                                             </div>
                                         </div>
                                     )}

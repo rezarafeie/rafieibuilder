@@ -11,6 +11,7 @@ interface PreviewCanvasProps {
   isGenerating?: boolean;
   isUpdating?: boolean;
   onRuntimeError?: (error: string) => void;
+  onSuccess?: () => void;
   projectId?: string; // Optional: Used for context-aware routing injection
   active?: boolean; // Optimization: Pause updates when hidden
   externalUrl?: string; // Optional: External deployment URL (Vercel)
@@ -37,6 +38,7 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     isGenerating = false, 
     isUpdating = false, 
     onRuntimeError, 
+    onSuccess,
     projectId, 
     active = true, 
     externalUrl,
@@ -161,7 +163,10 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
         loading="lazy"
         src={srcProp}
         srcDoc={srcDocProp}
-        onLoad={() => setIsLoading(false)}
+        onLoad={() => {
+            setIsLoading(false);
+            if (onSuccess) onSuccess();
+        }}
       />
       
       {isUpdating && hasRuntimeError && !showErrorDetails && (

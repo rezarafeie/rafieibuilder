@@ -1,6 +1,6 @@
 
 import { createClient } from '@supabase/supabase-js';
-import { User, Project, RafieiCloudProject, ProjectFile, Message, BuildState } from '../types';
+import { User, Project, RafieiCloudProject, ProjectFile, Message, BuildState, CreditLedgerEntry, FinancialStats } from '../types';
 import { GenerationSupervisor } from './geminiService';
 import { getCurrentLanguage, Language } from '../utils/translations';
 
@@ -177,6 +177,16 @@ export const cloudService = {
         let currentProject = { ...project };
         const lang = /[\u0600-\u06FF]/.test(prompt) ? 'fa' : getCurrentLanguage();
 
+        let enrichedPrompt = prompt;
+        if (images && images.length > 0) {
+            enrichedPrompt += "\n\n--- IMAGE ATTACHMENTS ---\n";
+            enrichedPrompt += "The user has provided images. Use these specific Supabase URLs for <img> tags in your code if you need to display them:\n";
+            images.forEach((img, i) => {
+                enrichedPrompt += `Image ${i+1}: ${img.url}\n`;
+            });
+            enrichedPrompt += "---------------------------\n";
+        }
+
         const updateLocalState = (updates: Partial<Project>, meta?: any) => {
             currentProject = { ...currentProject, ...updates };
             onUpdate(currentProject, meta);
@@ -218,7 +228,7 @@ export const cloudService = {
             }
         };
 
-        const supervisor = new GenerationSupervisor(currentProject, prompt, images.map(i => i.base64 || i.url), {
+        const supervisor = new GenerationSupervisor(currentProject, enrichedPrompt, images.map(i => i.base64 || i.url), {
             onPlanUpdate: async (phases) => { 
                 updateLocalState({ buildState: { ...currentProject.buildState!, phases } }); 
             },
@@ -332,7 +342,7 @@ export const cloudService = {
     },
 
     async checkTableExists(tableName: string) { return true; },
-    async rpc(fn: string, params: any) { return await supabase.rpc(fn, params); },
+    async rpc(fn: string, params?: any) { return await supabase.rpc(fn, params); },
     async getAdminProjects(page = 1, limit = 10) { 
         const { data, count } = await supabase.from('projects').select('*', { count: 'exact' }).range((page-1)*limit, page*limit-1);
         return { data: (data || []).map(p => this.mapProject(p)), count: count || 0 };
@@ -349,10 +359,43 @@ export const cloudService = {
         const { data, count } = await supabase.from('system_logs').select('*', { count: 'exact' }).range((page-1)*limit, page*limit-1);
         return { data: data || [], count: count || 0 };
     },
-    async getFinancialStats() { return { totalRevenueCredits: 0, totalCostUsd: 0, netProfitUsd: 0, totalCreditsPurchased: 0, currentMargin: 50, totalInputTokens: 0, totalOutputTokens: 0, totalRequestCount: 0 }; },
+    async getFinancialStats(): Promise<FinancialStats> {
+        const { data, error } = await supabase.rpc('get_financial_stats');
+        if (error) {
+            console.error("Failed to fetch financial stats:", error);
+            // Return zeros if RPC missing
+            return { totalRevenueCredits: 0, totalCostUsd: 0, netProfitUsd: 0, totalCreditsPurchased: 0, currentMargin: 0, totalInputTokens: 0, totalOutputTokens: 0, totalRequestCount: 0 };
+        }
+        return data as FinancialStats;
+    },
+    async updateProfitMargin(percentage: number): Promise<void> {
+        const { error } = await supabase.from('financial_settings').update({ profit_margin_percentage: percentage }).eq('id', 1);
+        if (error) throw error;
+    },
     async getLedger(page = 1, limit = 10) { 
-        const { data, count } = await supabase.from('credit_ledger').select('*', { count: 'exact' }).order('created_at', { ascending: false }).range((page-1)*limit, page*limit-1);
-        return { data: data || [], count: count || 0 };
+        const { data, count } = await supabase
+            .from('credit_ledger')
+            .select('*', { count: 'exact' })
+            .order('created_at', { ascending: false })
+            .range((page-1)*limit, page*limit-1);
+        
+        // FIX: Map snake_case database fields to camelCase properties for frontend consumption
+        const mappedData: CreditLedgerEntry[] = (data || []).map((row: any) => ({
+            id: row.id,
+            userId: row.user_id,
+            projectId: row.project_id,
+            operationType: row.operation_type,
+            model: row.model,
+            inputTokens: parseInt(row.input_tokens || '0'),
+            outputTokens: parseInt(row.output_tokens || '0'),
+            rawCostUsd: parseFloat(row.raw_cost_usd || '0'),
+            profitMargin: parseFloat(row.profit_margin || '0'),
+            creditsDeducted: parseFloat(row.credits_deducted || '0'),
+            createdAt: new Date(row.created_at).getTime(),
+            meta: row.meta
+        }));
+
+        return { data: mappedData, count: count || 0 };
     },
     async getSystemSetting(key: string) { 
         const { data } = await supabase.from('system_settings').select('value').eq('key', key).maybeSingle();
