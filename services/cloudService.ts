@@ -306,6 +306,19 @@ export const cloudService = {
                     await createOrUpdateBuildMessage('fatal_error', { type: 'build_error', content: `The build process encountered an error: ${err}. Please try again or adjust your prompt.`, status: 'failed', icon: 'alert-triangle' });
                     this.saveProject(currentProject).catch(console.error);
                 }
+            },
+            onNarration: async (text: string) => {
+                const narrationMsg: Message = {
+                    id: crypto.randomUUID(),
+                    role: 'assistant',
+                    type: 'assistant_response', // Treat as standard chat response for history
+                    content: text,
+                    status: 'completed',
+                    timestamp: Date.now()
+                };
+                const updatedMessages = [...currentProject.messages, narrationMsg];
+                updateLocalState({ messages: updatedMessages });
+                await this.saveProject(currentProject);
             }
         }, signal, lang as Language);
 

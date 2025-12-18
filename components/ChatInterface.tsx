@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Message, Suggestion, BuildState, User } from '../types';
 import { Send, Sparkles, Square, RefreshCw, Wrench, Lightbulb, Paperclip, X, Image as ImageIcon, Loader2, AlertTriangle, Cloud, Wand2, Copy, MoreHorizontal, Clock, Check, Coins, CheckCircle2, XCircle, FileCode, CheckSquare, Circle, Info, ArrowRight, Play, Brain, ChevronDown, ChevronUp } from 'lucide-react';
@@ -298,6 +299,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [input, setInput] = useState('');
   const [stagedImages, setStagedImages] = useState<ImageUpload[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [isResumeDismissed, setIsResumeDismissed] = useState(false); // New state to dismiss resume card
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const successSoundRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -388,7 +391,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         </div>
       )}
       
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 scroll-smooth">
+      <div className="flex-1 overflow-y-auto px-2 py-4 md:p-4 space-y-4 scroll-smooth">
         {messages.length === 0 && !isThinking && (
             <div className="h-full flex flex-col items-center justify-center text-slate-400 dark:text-gray-600 opacity-60">
                 <Sparkles size={32} strokeWidth={1.5} />
@@ -403,7 +406,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             const isLastMessage = idx === messages.length - 1;
             
             return (
-              <div key={msg.id} className={`flex gap-3 group animate-in fade-in slide-in-from-bottom-2 duration-300 ${isUserInput ? 'flex-row-reverse' : 'flex-row'}`}>
+              <div key={msg.id} className={`flex gap-2 md:gap-3 items-start group animate-in fade-in slide-in-from-bottom-2 duration-300 ${isUserInput ? 'flex-row-reverse' : 'flex-row'}`}>
                  {!isBuildMessage && (
                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-1 overflow-hidden shadow-sm ${
                          isUserInput ? 'bg-slate-100 dark:bg-slate-800' : 'bg-indigo-50 dark:bg-indigo-900/10'
@@ -416,7 +419,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                      </div>
                  )}
 
-                 <div className={`max-w-[85%] text-sm ${
+                 <div className={`max-w-[92%] md:max-w-[85%] text-sm ${
                      isUserInput 
                      ? 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 px-4 py-2 rounded-2xl rounded-tr-sm' 
                      : isAssistantResponse ? 'text-slate-700 dark:text-slate-300 pt-1' : 'text-slate-700 dark:text-slate-300 pt-0.5'
@@ -448,19 +451,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             </div>
         )}
 
-        {isResumable && !isThinking && (
-            <div className="flex gap-3 animate-in fade-in">
-                <div className="w-full bg-indigo-50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-800/50 rounded-xl p-4 flex flex-col items-center text-center">
-                    <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-900/50 flex items-center justify-center text-indigo-600 dark:text-indigo-400 mb-3">
-                        <Play size={20} fill="currentColor" className="ml-1" />
-                    </div>
-                    <h4 className="font-bold text-slate-900 dark:text-white text-sm mb-1">Resume Building?</h4>
-                    <p className="text-slate-500 dark:text-slate-400 text-xs mb-4">Your project wasn't finished. I can continue where I left off.</p>
+        {/* Minimal Resume Building Pill */}
+        {isResumable && !isThinking && !isResumeDismissed && (
+            <div className="flex justify-center py-2 animate-in fade-in slide-in-from-bottom-2">
+                <div className="flex items-center gap-3 px-3 py-1.5 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-500/30 rounded-full shadow-sm hover:shadow-md transition-all backdrop-blur-sm">
                     <button 
-                        onClick={onContinue} 
-                        className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-6 py-2 rounded-full transition-all shadow-lg shadow-indigo-500/20 flex items-center gap-2"
+                        onClick={onContinue}
+                        className="flex items-center gap-2 cursor-pointer group/resume"
                     >
-                        <Play size={12} fill="currentColor" /> {t('continueBuild')}
+                        <Play size={12} className="text-indigo-600 dark:text-indigo-400 fill-current group-hover/resume:scale-110 transition-transform" />
+                        <span className="text-xs font-medium text-slate-700 dark:text-indigo-200 group-hover/resume:text-indigo-600 dark:group-hover/resume:text-indigo-300">Resume paused build</span>
+                    </button>
+                    <div className="w-px h-3 bg-indigo-200 dark:bg-indigo-700"></div>
+                    <button 
+                        onClick={() => setIsResumeDismissed(true)} 
+                        className="text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors p-0.5 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700"
+                        title="Dismiss"
+                    >
+                        <X size={12} />
                     </button>
                 </div>
             </div>

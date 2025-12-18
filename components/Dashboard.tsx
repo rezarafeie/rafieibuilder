@@ -264,7 +264,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, view }) => {
   // Pagination State
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const PROJECTS_PER_PAGE = 2;
+  const PROJECTS_PER_PAGE = 3;
   
   const [currentBalance, setCurrentBalance] = useState(user.credits_balance);
   const [actionId, setActionId] = useState<string | null>(null);

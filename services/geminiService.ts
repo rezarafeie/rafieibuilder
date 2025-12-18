@@ -33,7 +33,8 @@ export const PROMPT_KEYS = {
     'BUILDER': 'sys_prompt_builder_v13', 
     'UPDATER': 'sys_prompt_updater_v13', 
     'REPAIR_PLANNER': 'sys_prompt_repair_planner_v13',
-    'TITLE': 'sys_prompt_title_v13'
+    'TITLE': 'sys_prompt_title_v13',
+    'NARRATOR': 'sys_prompt_narrator_v13'
 };
 
 export const DEFAULTS: Record<string, string> = {
@@ -84,7 +85,14 @@ Output JSON ONLY: { "patches": [ { "path": "string", "content": "string" } ], "e
 
     'TITLE': `Generate a short, catchy project title (max 4 words).
 JSON ONLY.
-Example: { "title": "TaskMaster" }`
+Example: { "title": "TaskMaster" }`,
+
+    'NARRATOR': `You are a Build Narrator (like Lovable or Google Cloud console).
+Task: Convert the technical Phase Title and list of Completed Steps into a friendly, single-sentence summary for the user.
+Style: Professional, concise, encouraging. Max 20 words. No technical jargon.
+JSON ONLY.
+Example Input: Phase: "UI", Steps: ["Created Header", "Created Hero"]
+Example Output: { "text": "I've set up the main layout and added the hero section." }`
 };
 
 const getSystemPrompt = async (key: string): Promise<string> => {
@@ -315,6 +323,7 @@ export interface SupervisorCallbacks {
     onFinalError: (error: string) => Promise<void>;
     onAIDebugLog?: (log: AIDebugLog, logicalMessageKey: string) => void;
     waitForPreview?: (timeoutMs: number) => Promise<{ success: boolean; error?: string }>;
+    onNarration?: (text: string) => Promise<void>;
 }
 
 export class GenerationSupervisor {
@@ -414,8 +423,11 @@ export class GenerationSupervisor {
                 
                 const stepsRes = await this.runStep('PLANNER', JSON.stringify({ request: this.userPrompt, phase, design: designSpec }), phaseMsgId);
                 const steps = stepsRes.steps || [];
+                const executedStepTitles: string[] = [];
+
                 for (let j = 0; j < steps.length; j++) {
                     const step = steps[j];
+                    executedStepTitles.push(step.title);
                     await this.callbacks.onBuildMessage(`phase_${i}`, { id: phaseMsgId, currentStepProgress: { current: j + 1, total: steps.length, stepName: step.title } });
                     const builderRes = await this.runStep('BUILDER', JSON.stringify({ task: step.description, path: step.path, context: this.accumulatedFiles.map(f=>({path:f.path, content: f.content.substring(0, 1000)})) }), phaseMsgId);
                     
@@ -428,6 +440,18 @@ export class GenerationSupervisor {
                 phase.status = 'completed';
                 await this.callbacks.onPhaseComplete(i);
                 await this.callbacks.onBuildMessage(`phase_${i}`, { id: phaseMsgId, status: 'completed' });
+
+                // --- NARRATOR SYSTEM ---
+                if (this.callbacks.onNarration && executedStepTitles.length > 0) {
+                    try {
+                        const narrationRes = await this.runStep('NARRATOR', JSON.stringify({ phase: phase.title, steps: executedStepTitles }), `narrate_${i}`);
+                        if (narrationRes && narrationRes.text) {
+                            await this.callbacks.onNarration(narrationRes.text);
+                        }
+                    } catch (narrError) {
+                        console.warn("Narration failed (non-critical):", narrError);
+                    }
+                }
             }
             await this.callbacks.onSuccess(this.project.code, "Build finished.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
         } catch (e: any) {

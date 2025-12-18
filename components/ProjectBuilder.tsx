@@ -17,7 +17,8 @@ import ProjectLogModal, { LogEntry } from './ProjectLogModal';
 import { 
     Loader2, ArrowLeft, PanelLeft, Monitor, Tablet, Smartphone, 
     Check, Cloud, MessageSquare, Eye, Globe, X, LayoutDashboard, 
-    ExternalLink, Power, FileText, Rocket, AlertTriangle, Play
+    ExternalLink, Power, FileText, Rocket, AlertTriangle, Play,
+    Pencil
 } from 'lucide-react';
 
 interface ProjectBuilderProps {
@@ -85,6 +86,10 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   
   const [showCloudDetails, setShowCloudDetails] = useState(false);
   const [localCloudError, setLocalCloudError] = useState<string | null>(null);
+
+  // Rename Project State
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editedName, setEditedName] = useState('');
 
   // Log State
   const [isLogModalOpen, setIsLogModalOpen] = useState(false);
@@ -401,6 +406,34 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
         // 7. Persist to DB to ensure reloading page sees stopped state
         await cloudService.saveProject(stoppedProject);
     }
+  };
+
+  const handleStartEditName = () => {
+      if (project) {
+          setEditedName(project.name);
+          setIsEditingName(true);
+      }
+  };
+
+  const handleSaveName = async () => {
+      if (!project) return;
+      const newName = editedName.trim();
+      if (newName && newName !== project.name) {
+          const updatedProject = { ...project, name: newName };
+          setProject(updatedProject);
+          titleRef.current = newName; // Prevent auto-naming overwrite
+          try {
+              await cloudService.saveProject(updatedProject);
+          } catch (e) {
+              console.error("Failed to save project name", e);
+          }
+      }
+      setIsEditingName(false);
+  };
+
+  const handleNameKeyDown = (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter') handleSaveName();
+      if (e.key === 'Escape') setIsEditingName(false);
   };
 
   const handleRetry = (prompt: string) => {
@@ -757,7 +790,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   const hasCloudProject = project.rafieiCloudProject != null && project.rafieiCloudProject.status === 'ACTIVE';
   
   return (
-    <div className="flex flex-col h-screen bg-white dark:bg-[#0f172a] text-slate-900 dark:text-white overflow-hidden transition-colors duration-300" dir={dir}>
+    <div className="flex flex-col h-[100dvh] w-full bg-white dark:bg-[#0f172a] text-slate-900 dark:text-white overflow-hidden transition-colors duration-300" dir={dir}>
         <ProjectLogModal 
             isOpen={isLogModalOpen}
             onClose={() => setIsLogModalOpen(false)}
@@ -775,10 +808,32 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                 </button>
                 <div className="h-6 w-px bg-slate-200 dark:bg-gray-700 hidden sm:block"></div>
                 <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className={`p-2 rounded-lg transition-colors ${isSidebarOpen ? 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/20' : 'text-slate-500 dark:text-gray-400 hover:bg-slate-100 dark:hover:bg-gray-800'}`}><PanelLeft size={18} /></button>
-                <h1 className="font-semibold text-slate-800 dark:text-gray-200 truncate max-w-[150px] md:max-w-md hidden sm:block">
-                    {project.name}
-                    {!project.name || project.name === 'New Project' ? <span className="opacity-50 text-xs ml-2 font-normal">(Naming...)</span> : null}
-                </h1>
+                
+                {isEditingName ? (
+                    <input 
+                        autoFocus
+                        type="text"
+                        value={editedName}
+                        onChange={(e) => setEditedName(e.target.value)}
+                        onBlur={handleSaveName}
+                        onKeyDown={handleNameKeyDown}
+                        className="bg-transparent border border-indigo-500 rounded px-2 py-0.5 text-sm font-semibold text-slate-900 dark:text-white outline-none min-w-[200px]"
+                    />
+                ) : (
+                    <div className="flex items-center gap-2 group/title cursor-pointer" onClick={handleStartEditName}>
+                        <h1 className="font-semibold text-slate-800 dark:text-gray-200 truncate max-w-[150px] md:max-w-md hidden sm:block">
+                            {project.name}
+                            {!project.name || project.name === 'New Project' ? <span className="opacity-50 text-xs ml-2 font-normal">(Naming...)</span> : null}
+                        </h1>
+                        <button 
+                            className="p-1 text-slate-400 hover:text-indigo-500 opacity-0 group-hover/title:opacity-100 transition-opacity rounded-md hover:bg-slate-100 dark:hover:bg-slate-800"
+                            title="Rename Project"
+                        >
+                            <Pencil size={14} />
+                        </button>
+                    </div>
+                )}
+
                 {isAutoDeploying && <span className="text-xs text-indigo-500 flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Auto Deploying...</span>}
             </div>
             <div className="flex-1 flex justify-center items-center gap-6">
@@ -829,7 +884,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
             </div>
         </div>
 
-        <div className="md:hidden h-14 bg-white dark:bg-[#0f172a] border-b border-slate-200 dark:border-slate-700 flex items-center justify-between px-4 shrink-0 z-20">
+        <div className="md:hidden h-14 bg-white dark:bg-[#0f172a] border-b border-slate-200 dark:border-slate-700 flex items-center justify-between px-4 shrink-0 z-20 pt-[env(safe-area-inset-top)]">
             <button onClick={() => navigate('/dashboard')}><ArrowLeft size={20} className="text-slate-600 dark:text-slate-300 rtl:rotate-180" /></button>
             <div className="flex bg-slate-100 dark:bg-slate-800 rounded-lg p-1">
                 <button onClick={handleContinue} className={`px-4 py-1.5 rounded-md text-xs font-medium transition-all ${mobileTab === 'chat' ? 'bg-white dark:bg-slate-600 shadow-sm text-indigo-600 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}>Chat</button>
