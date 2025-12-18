@@ -1,3 +1,4 @@
+
 import { GeneratedCode, ProjectFile, Project } from "../types";
 import { getCurrentLanguage } from './translations';
 
@@ -66,6 +67,7 @@ const DEFAULT_INDEX_HTML = `<!DOCTYPE html>
   </head>
   <body>
     <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>`;
 

@@ -1,3 +1,4 @@
+
 import { createClient } from '@supabase/supabase-js';
 import { GeneratedCode, Message, Project, Phase, BuildAudit, AIProviderConfig, AIUsageResult, ProjectFile, User, AIDebugLog } from "../types";
 import { billingService } from "./billingService";
@@ -355,7 +356,7 @@ export class GenerationSupervisor {
         const foundationPaths = ['index.html', 'src/main.tsx', 'src/App.tsx'];
         if (foundationPaths.some(p => !this.accumulatedFiles.some(f => f.path === p))) {
             const defaults = [
-                { path: 'index.html', content: '<!DOCTYPE html><html><head><meta charset="UTF-8" /><title>App</title></head><body><div id="root"></div></body></html>', type: 'file' as const },
+                { path: 'index.html', content: '<!DOCTYPE html><html><head><meta charset="UTF-8" /><title>App</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>', type: 'file' as const },
                 { path: 'src/main.tsx', content: 'import React from "react";\nimport { createRoot } from "react-dom/client";\nimport App from "./App";\nconst root = document.getElementById("root");\nif (root) createRoot(root).render(<App />);', type: 'file' as const },
                 { path: 'src/App.tsx', content: 'import React from "react";\nexport default function App() { return <div className="p-8"><h1>Initializing App...</h1></div>; }', type: 'file' as const }
             ];
