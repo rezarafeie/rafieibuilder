@@ -10,7 +10,6 @@ export const openaiService = {
         images?: string[]
     ): Promise<{ text: string, usage: AIUsageResult }> {
         
-        const PROXY_URL = 'https://corsproxy.io/?';
         const OPENAI_URL = 'https://api.openai.com/v1/responses';
 
         // Context Identifiers
