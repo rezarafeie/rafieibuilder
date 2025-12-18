@@ -61,6 +61,9 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
   const lastSuggestionMessageIdRef = useRef<string | null>(null);
   const failedSuggestionAttemptsRef = useRef<Record<string, number>>({});
   
+  // Ref to track generated title across async build process
+  const titleRef = useRef<string | null>(null);
+
   const connectingRef = useRef(false);
   const autoRepairAttemptsRef = useRef(0);
   const isAutoFixingRef = useRef(false);
@@ -246,6 +249,12 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
   useEffect(() => {
       projectRef.current = project;
+      
+      // Sync titleRef if project loads with a real name
+      if (project && project.name && project.name !== 'New Project') {
+          titleRef.current = project.name;
+      }
+
       if (project && project.status === 'idle' && project.messages.length === 1 && project.messages[0].role === 'user' && !project.code.javascript && !autoStartRef.current) {
           autoStartRef.current = true;
           const prompt = project.messages[0].content || '';
@@ -310,11 +319,16 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
     isUserStoppedRef.current = false;
     autoStartRef.current = false;
     setFallbackToLocalPreview(false); 
+    titleRef.current = null; // Reset title tracker on load
   }, [projectId]);
 
   useEffect(() => {
     if (!projectId) return;
     const { unsubscribe } = cloudService.subscribeToProjectChanges(projectId, (updatedProject) => {
+      // Logic to prevent overwriting generated title with "New Project" from external sync if we have a better one locally
+      if (titleRef.current && titleRef.current !== "New Project" && updatedProject.name === "New Project") {
+          updatedProject.name = titleRef.current;
+      }
       setProject(updatedProject);
       setBuildState(updatedProject.buildState || null);
     });
@@ -543,7 +557,12 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
         ? [...(buildState?.logs || []), "thinking ...."]
         : [t('initBuild'), t('analyzingReq'), t('preparingEnv')];
     
-    setBuildState({
+    // IMMEDIATE STATE UPDATE: Force 'generating' status to show spinner/thinking instantly
+    updatedProject.status = 'generating';
+    updatedProject.updatedAt = Date.now();
+    
+    // Prepare initial Build State
+    const newBuildState: BuildState = {
         plan: buildState?.plan || [],
         phases: buildState?.phases || [],
         currentPhaseIndex: buildState?.currentPhaseIndex || 0,
@@ -551,41 +570,63 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
         lastCompletedStep: buildState?.lastCompletedStep || -1,
         error: null,
         logs: initialLogs
-    });
+    };
+    
+    updatedProject.buildState = newBuildState;
+    setProject(updatedProject);
+    setBuildState(newBuildState);
+
+    // NON-BLOCKING TITLE GENERATION
+    if (!isResume && updatedProject.messages.filter(m => m.role === 'user').length === 1) {
+        generateProjectTitle(content, user, updatedProject).then(title => {
+            if (title && title !== "New Project") {
+                // Update local ref immediately to prevent overwrites
+                titleRef.current = title;
+                
+                setProject(prev => prev ? ({ ...prev, name: title }) : null);
+                if (projectRef.current) projectRef.current.name = title;
+                
+                // Fire silent DB update
+                cloudService.saveProject({ ...updatedProject, name: title }).catch(console.error);
+            }
+        });
+    }
 
     try {
-        let projectToBuild = { ...updatedProject };
-        
-        if (!isResume && projectToBuild.messages.filter(m => m.role === 'user').length === 1) {
-            const title = await generateProjectTitle(content, user, projectToBuild);
-            projectToBuild.name = title;
-        }
-
-        projectToBuild.status = 'generating';
-        projectToBuild.updatedAt = Date.now(); 
-        
-        projectToBuild.buildState = {
-            ...(buildState || { plan: [], phases: [], currentPhaseIndex: 0, currentStep: 0, lastCompletedStep: -1, error: null }),
-            logs: [...initialLogs]
-        };
-
-        setProject(projectToBuild); 
-
         const onUpdateCallback = (updatedState: Project, meta?: any) => {
             setProject(prev => {
                 if (!prev || prev.id !== updatedState.id) return prev;
-                return updatedState;
+                
+                // KEY FIX: If we have a valid generated title in titleRef, enforce it on the state
+                // This prevents "New Project" from the build supervisor overwriting the generated name
+                let finalName = updatedState.name;
+                if (titleRef.current && titleRef.current !== "New Project") {
+                    finalName = titleRef.current;
+                }
+
+                const result = { ...updatedState, name: finalName };
+                return result;
             });
+            
+            // Also update build state independently
             setBuildState(updatedState.buildState || null);
+            
             if (updatedState.status === 'idle' && updatedState.buildState?.audit?.passed) {
                 setRuntimeError(null);
             }
             if (meta?.requires_database && !pendingPrompt) {
                 setPendingPrompt({ content, images });
             }
+
+            // Return the potentially modified project (with correct name) back to cloudService
+            // so cloudService's internal loop adopts the new name and saves it correctly.
+            if (titleRef.current && titleRef.current !== "New Project" && updatedState.name === "New Project") {
+                return { ...updatedState, name: titleRef.current };
+            }
         };
 
-        cloudService.triggerBuild(projectToBuild, content, images, onUpdateCallback, isResume);
+        // Start the build process
+        cloudService.triggerBuild(updatedProject, content, images, onUpdateCallback, isResume);
 
     } catch (e: any) {
         console.error("Handle Message Error", e);
@@ -664,7 +705,10 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                 </button>
                 <div className="h-6 w-px bg-slate-200 dark:bg-gray-700 hidden sm:block"></div>
                 <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className={`p-2 rounded-lg transition-colors ${isSidebarOpen ? 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/20' : 'text-slate-500 dark:text-gray-400 hover:bg-slate-100 dark:hover:bg-gray-800'}`}><PanelLeft size={18} /></button>
-                <h1 className="font-semibold text-slate-800 dark:text-gray-200 truncate max-w-[150px] md:max-w-md hidden sm:block">{project.name}</h1>
+                <h1 className="font-semibold text-slate-800 dark:text-gray-200 truncate max-w-[150px] md:max-w-md hidden sm:block">
+                    {project.name}
+                    {!project.name || project.name === 'New Project' ? <span className="opacity-50 text-xs ml-2 font-normal">(Naming...)</span> : null}
+                </h1>
                 {isAutoDeploying && <span className="text-xs text-indigo-500 flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Auto Deploying...</span>}
             </div>
             <div className="flex-1 flex justify-center items-center gap-6">

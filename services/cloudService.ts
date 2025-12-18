@@ -168,7 +168,7 @@ export const cloudService = {
         return { unsubscribe: () => supabase.removeChannel(channel) };
     },
 
-    async triggerBuild(project: Project, prompt: string, images: { url: string; base64: string }[], onUpdate: (p: Project, meta?: any) => void, isResume: boolean = false) {
+    async triggerBuild(project: Project, prompt: string, images: { url: string; base64: string }[], onUpdate: (p: Project, meta?: any) => Project | void, isResume: boolean = false) {
         if (this.abortController) this.abortController.abort();
         this.abortController = new AbortController();
         const signal = this.abortController.signal;
@@ -189,7 +189,11 @@ export const cloudService = {
 
         const updateLocalState = (updates: Partial<Project>, meta?: any) => {
             currentProject = { ...currentProject, ...updates };
-            onUpdate(currentProject, meta);
+            // Allow callback to return a modified project (e.g. injected name)
+            const externallyModified = onUpdate(currentProject, meta);
+            if (externallyModified) {
+                currentProject = externallyModified;
+            }
             return currentProject;
         };
 
@@ -228,6 +232,10 @@ export const cloudService = {
             }
         };
 
+        // --- IMMEDIATE FEEDBACK ---
+        // Insert an initial 'Thinking' message to reassure the user
+        await createOrUpdateBuildMessage('init_thinking', { type: 'build_status', content: "Initializing build environment...", status: 'working', icon: 'loader' });
+
         const supervisor = new GenerationSupervisor(currentProject, enrichedPrompt, images.map(i => i.base64 || i.url), {
             onPlanUpdate: async (phases) => { 
                 updateLocalState({ buildState: { ...currentProject.buildState!, phases } }); 
@@ -253,8 +261,25 @@ export const cloudService = {
                 updateLocalState({ code, status: 'generating', files: meta?.files || currentProject.files }); 
             },
             onSuccess: async (code, exp, audit, meta) => { 
-                updateLocalState({ code, status: 'idle', files: meta?.files || currentProject.files }); 
-                this.saveProject(currentProject).catch(console.error);
+                // Force a completion message
+                const completeMsg: Message = {
+                    id: crypto.randomUUID(),
+                    role: 'assistant',
+                    type: 'final_summary',
+                    content: "🎉 **Build Complete!**\n\nI've finished building the application structure and components. You can now preview the results.",
+                    status: 'completed',
+                    icon: 'check',
+                    timestamp: Date.now()
+                };
+                const updatedMessages = [...currentProject.messages, completeMsg];
+                
+                updateLocalState({ 
+                    code, 
+                    status: 'idle', 
+                    files: meta?.files || currentProject.files,
+                    messages: updatedMessages
+                }); 
+                await this.saveProject(currentProject);
             },
             onError: async (err) => {
                 if (err !== "ABORTED") {

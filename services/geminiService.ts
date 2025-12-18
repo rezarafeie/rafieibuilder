@@ -36,26 +36,54 @@ export const PROMPT_KEYS = {
 };
 
 export const DEFAULTS: Record<string, string> = {
-    'CLASSIFIER': `You are a strategic router for a web app builder. Analyze user intent and respond with a minified JSON object.
-Intents:
-- "chat": Conversation only.
-- "build": New project or huge feature.
-- "update": Specific edits to code (e.g. "change gallery", "add login", "fix styles").
-{ "intent": "chat" | "build" | "update", "direct_response": "string" }`,
-    'UPDATER': `Surgical code editor. Analyze request vs existing files and provide ONLY modified files.
-RULES:
-1. "content" MUST be the FULL new source code of the file.
-2. Escape all newlines as \\n and double-quotes as \\".
-{
-  "file_changes": [ { "path": "src/App.tsx", "content": "import...", "action": "update" } ],
-  "summary": "Short explanation"
-}`,
-    'DESIGN': `Architect the UI/UX. { "design_language": { "theme": "modern" }, "pages": [...] }`,
-    'PHASE_PLANNER': `Milestone planner. { "phases": [ { "title": "Setup", "goal": "...", "type": "ui" } ] }`,
-    'PLANNER': `Step-by-step file plan. { "steps": [ { "title": "Navbar", "path": "src/Nav.tsx", "description": "..." } ] }`,
-    'BUILDER': `File generator. { "file_changes": [ { "path": "...", "content": "..." } ] }`,
-    'REPAIR_PLANNER': `Surgically fix errors. { "patches": [ { "path": "...", "content": "..." } ], "explanation": "..." }`,
-    'TITLE': `{ "title": "App Name" }`
+    'CLASSIFIER': `You are the brain of an AI App Builder. Analyze the user's request.
+Possible Intents:
+1. "build": creating a new app, adding a major feature, or changing the look significantly.
+2. "update": changing specific text, fixing a small bug, or minor CSS tweaks.
+3. "chat": general questions not related to code changes.
+
+Output JSON ONLY:
+{ "intent": "build" | "update" | "chat", "direct_response": "string" }`,
+
+    'UPDATER': `You are an expert React/Vite developer.
+Task: Update specific files based on the user request.
+Output JSON ONLY.
+Format: { "patches": [ { "path": "src/App.tsx", "content": "FULL_FILE_CONTENT_HERE" } ], "summary": "string" }
+IMPORTANT: Return the COMPLETE file content, not diffs.`,
+
+    'DESIGN': `You are a UI/UX Architect.
+Task: Design a modern, beautiful, and responsive web application.
+Style: Clean, whitespace-heavy, rounded corners, subtle shadows (Lovable/Vercel style).
+CRITICAL: Focus ONLY on UI components, Layout, and User Experience.
+FORBIDDEN: Do NOT generate marketing briefs, audience segments, or conversion strategies.
+Output JSON ONLY: { "design_language": { "theme": "modern", "colors": ["#..."] }, "pages": [{ "name": "Home", "components": ["Hero", "Features"] }] }`,
+
+    'PHASE_PLANNER': `You are a Project Manager.
+Task: Break down the build into logical phases.
+CRITICAL: Start immediately with "Setup" and "UI Implementation".
+FORBIDDEN: Do NOT create phases for "Research", "Briefing", "Strategy", or "Audience Analysis".
+Output JSON ONLY: { "phases": [ { "title": "Setup", "goal": "Initialize layout", "type": "ui" } ] }`,
+
+    'PLANNER': `You are a Tech Lead.
+Task: List specific file generation steps for this phase.
+Output JSON ONLY: { "steps": [ { "title": "Create Header", "path": "src/components/Header.tsx", "description": "Responsive navbar with logo" } ] }`,
+
+    'BUILDER': `You are a Senior React Developer.
+Task: Write professional, production-ready code.
+Stack: React 18, Tailwind CSS, Lucide React, Framer Motion (optional).
+Rules:
+- Use 'export default' for components.
+- Ensure all imports are valid (lucide-react, react-router-dom).
+- NO placeholders. Write full logic.
+Output JSON ONLY: { "file_changes": [ { "path": "string", "content": "string" } ] }`,
+
+    'REPAIR_PLANNER': `You are a Debugging Expert.
+Task: Analyze the error and fix the code.
+Output JSON ONLY: { "patches": [ { "path": "string", "content": "string" } ], "explanation": "string" }`,
+
+    'TITLE': `Generate a short, catchy project title (max 4 words).
+JSON ONLY.
+Example: { "title": "TaskMaster" }`
 };
 
 const getSystemPrompt = async (key: string): Promise<string> => {
@@ -79,13 +107,6 @@ const preRepairMangledJson = (text: string): string => {
     result = result.replace(backtickRegex, (match, key, content, suffix) => {
         return `${key}: ${JSON.stringify(content)}${suffix}`;
     });
-    const multilineValueRegex = /("[\w_]+")\s*:\s*"([\s\S]*?)"(\s*[,}\]])/g;
-    result = result.replace(multilineValueRegex, (match, key, content, suffix) => {
-        if (content.includes('\n')) {
-            return `${key}: ${JSON.stringify(content)}${suffix}`;
-        }
-        return match;
-    });
     return result;
 };
 
@@ -98,6 +119,7 @@ const repairJson = (json: string): string => {
         escaped = repaired[i] === '\\' && !escaped;
     }
     if (inString) repaired += '"';
+    
     const stack: string[] = [];
     inString = false;
     escaped = false;
@@ -130,41 +152,58 @@ const extractJson = (text: string | undefined): any => {
     
     cleaned = cleaned.replace(/[\u200B-\u200D\uFEFF]/g, "");
 
-    try { 
-        return JSON.parse(cleaned); 
-    } catch (e) {
-        cleaned = preRepairMangledJson(cleaned);
-        const firstBrace = cleaned.indexOf('{');
-        const firstBracket = cleaned.indexOf('[');
-        const start = (firstBrace !== -1 && (firstBracket === -1 || (firstBrace < firstBracket))) ? firstBrace : firstBracket;
-        
-        if (start !== -1) {
-            let potentialJson = cleaned.substring(start);
-            const lastBrace = potentialJson.lastIndexOf('}');
-            const lastBracket = potentialJson.lastIndexOf(']');
-            const end = Math.max(lastBrace, lastBracket);
-            if (end !== -1) {
-                potentialJson = potentialJson.substring(0, end + 1);
-            }
+    if ((cleaned.startsWith('{') || cleaned.startsWith('[')) && (cleaned.endsWith('}') || cleaned.endsWith(']'))) {
+        try { 
+            return JSON.parse(cleaned); 
+        } catch (e) {
+        }
+    }
 
+    const firstBrace = cleaned.indexOf('{');
+    const firstBracket = cleaned.indexOf('[');
+    
+    let start = -1;
+    if (firstBrace !== -1 && firstBracket !== -1) {
+        start = Math.min(firstBrace, firstBracket);
+    } else if (firstBrace !== -1) {
+        start = firstBrace;
+    } else if (firstBracket !== -1) {
+        start = firstBracket;
+    }
+
+    if (start !== -1) {
+        let potentialJson = cleaned.substring(start);
+        const lastBrace = potentialJson.lastIndexOf('}');
+        const lastBracket = potentialJson.lastIndexOf(']');
+        const end = Math.max(lastBrace, lastBracket);
+        
+        if (end !== -1) {
+            potentialJson = potentialJson.substring(0, end + 1);
+            
             try { 
                 return JSON.parse(potentialJson); 
             } catch (innerError) {
-                const repaired = repairJson(potentialJson);
-                try { 
-                    return JSON.parse(repaired); 
-                } catch (finalError) {
-                    try {
-                        const fn = new Function(`return (${repaired})`);
-                        return fn();
-                    } catch (looseError) {
-                        throw new Error(`JSON Extraction failed. Original error: ${e.message}`);
+                potentialJson = preRepairMangledJson(potentialJson);
+                try {
+                    return JSON.parse(potentialJson);
+                } catch (mangleError) {
+                    const repaired = repairJson(potentialJson);
+                    try { 
+                        return JSON.parse(repaired); 
+                    } catch (finalError: any) {
+                        try {
+                            const fn = new Function(`return (${repaired})`);
+                            return fn();
+                        } catch (looseError) {
+                            throw new Error(`JSON Extraction failed. Raw text start: ${cleaned.substring(0, 50)}...`);
+                        }
                     }
                 }
             }
         }
     }
-    throw new Error("No structured JSON data found in AI response.");
+    
+    throw new Error(`No structured JSON data found in AI response. Response start: ${text.substring(0, 20)}...`);
 };
 
 // --- ORCHESTRATOR ---
@@ -182,12 +221,9 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
     
     if (config.id === 'google') {
         const model = config.model || 'gemini-3-pro-preview';
-        const PROXY_URL = 'https://corsproxy.io/?key=83a20021&url';
         const TARGET_URL = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.apiKey}`;
         
-        const contents: any[] = [];
         const parts: any[] = [];
-        
         if (images.length > 0) {
             images.forEach(img => {
                 let data = img;
@@ -200,12 +236,10 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
                 parts.push({ inlineData: { mimeType, data } });
             });
         }
-        
         parts.push({ text: prompt });
-        contents.push({ role: 'user', parts });
 
         const payload = {
-            contents: contents,
+            contents: [{ role: 'user', parts: parts }],
             generationConfig: { 
                 temperature: 0.1, 
                 maxOutputTokens: 16384,
@@ -214,7 +248,7 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
             systemInstruction: { parts: [{ text: systemInstruction }] }
         };
 
-        const response = await fetch(`${PROXY_URL}${encodeURIComponent(TARGET_URL)}`, {
+        const response = await fetch(TARGET_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -222,7 +256,7 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
 
         if (!response.ok) {
             const errText = await response.text();
-            throw new Error(`Gemini Proxy Error ${response.status}: ${errText}`);
+            throw new Error(`Gemini API Error ${response.status}: ${errText}`);
         }
 
         const data = await response.json();
@@ -432,8 +466,22 @@ export const generateProjectTitle = async (prompt: string, user: User, project: 
     try {
         const config = await getActiveProvider();
         const { text } = await executeAIRequest(config, `Request: ${prompt}`, await getSystemPrompt('TITLE'));
-        return extractJson(text).title || "New Project";
-    } catch (e) { return "New Project"; }
+        
+        try {
+            const json = extractJson(text);
+            return json.title || "New Project";
+        } catch (jsonError) {
+            console.warn("Title Generation: JSON extraction failed, attempting fallback.");
+            const cleanText = text.replace(/"/g, '').trim();
+            if (cleanText.length > 0 && cleanText.length < 50 && !cleanText.includes('{')) {
+                return cleanText;
+            }
+            return "New Project";
+        }
+    } catch (e) { 
+        console.error("Title Generation Failed:", e);
+        return "New Project"; 
+    }
 };
 
 export const handleUserIntent = async (project: Project, prompt: string) => ({ isArchitect: true });
