@@ -11,9 +11,6 @@ interface CreditBalanceModalProps {
     onClose: () => void;
 }
 
-// RESTRICTED KEY: Only for reference, do not use in client-side calls without security review
-const STRIPE_KEY_REF = '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';
-
 const CreditBalanceModal: React.FC<CreditBalanceModalProps> = ({ user, onClose }) => {
     const { t, lang, dir } = useTranslation();
     const [transactions, setTransactions] = useState<CreditTransaction[]>([]);
@@ -37,18 +34,17 @@ const CreditBalanceModal: React.FC<CreditBalanceModalProps> = ({ user, onClose }
                 setRate(r);
             }).catch(e => {
                 console.error("Rate fetch failed", e);
-                setRate(128500); // Fallback to safe estimate
+                setRate(128500); 
             }).finally(() => {
                 setIsRateLoading(false);
             });
         } else {
-            setRate(0.1); // 1 USD = 10 Credits => 1 Credit = 0.1 USD
+            setRate(0.1); 
         }
     }, [lang, activeTab]);
 
     const loadData = async () => {
         try {
-            // Updated to use cloudService which holds the session
             const txs = await cloudService.getUserTransactions(user.id);
             setTransactions(txs);
         } catch (e) {
@@ -68,12 +64,9 @@ const CreditBalanceModal: React.FC<CreditBalanceModalProps> = ({ user, onClose }
 
         try {
             if (lang === 'fa') {
-                // Zarinpal Flow
-                const url = await paymentService.requestZarinpalPayment(amount, user.email, ''); // Mobile optional
-                window.location.href = url; // Redirect to Payment Gateway
+                const url = await paymentService.requestZarinpalPayment(amount, user.email, ''); 
+                window.location.href = url; 
             } else {
-                // Disable insecure Stripe simulation. 
-                // A secure implementation requires a backend endpoint to create a PaymentIntent.
                 alert("Stripe payments are currently disabled in this demo environment. Please use Zarinpal or contact support.");
                 setIsProcessing(false);
                 return;
@@ -98,7 +91,6 @@ const CreditBalanceModal: React.FC<CreditBalanceModalProps> = ({ user, onClose }
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4 font-sans" dir={dir}>
             <div className="bg-white dark:bg-[#1e293b] w-full max-w-2xl rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col max-h-[90vh]">
                 
-                {/* Header */}
                 <div className="p-6 border-b border-slate-200 dark:border-slate-700 flex justify-between items-start bg-slate-50/50 dark:bg-slate-800/50">
                     <div className="flex items-center gap-4">
                         <div className="p-3 bg-indigo-500/10 rounded-xl border border-indigo-500/20">
@@ -106,13 +98,12 @@ const CreditBalanceModal: React.FC<CreditBalanceModalProps> = ({ user, onClose }
                         </div>
                         <div>
                             <h2 className="text-xl font-bold text-slate-900 dark:text-white">{t('manageCredits')}</h2>
-                            <p className="text-sm text-slate-500 dark:text-slate-400">{t('currentBalance')}: <strong className="text-emerald-500">{Number(user.credits_balance || 0).toFixed(2)}</strong></p>
+                            <p className="text-sm text-slate-500 dark:text-slate-400">{t('currentBalance')}: <strong className="text-emerald-500">{(Number(user.credits_balance) || 0).toFixed(2)}</strong></p>
                         </div>
                     </div>
                     <button onClick={onClose} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full transition-colors text-slate-500"><X size={20}/></button>
                 </div>
 
-                {/* Tabs */}
                 <div className="flex border-b border-slate-200 dark:border-slate-700">
                     <button 
                         onClick={() => setActiveTab('buy')}
@@ -128,7 +119,6 @@ const CreditBalanceModal: React.FC<CreditBalanceModalProps> = ({ user, onClose }
                     </button>
                 </div>
 
-                {/* Content */}
                 <div className="p-6 flex-1 overflow-y-auto">
                     {activeTab === 'buy' ? (
                         <div className="max-w-sm mx-auto space-y-6">
@@ -156,7 +146,7 @@ const CreditBalanceModal: React.FC<CreditBalanceModalProps> = ({ user, onClose }
                                 {isRateLoading ? <div className="flex items-center gap-2"><Loader2 className="animate-spin text-indigo-500" size={16} /><span className="text-xs text-slate-400">Fetching rate...</span></div> : (
                                     <span className="text-xl font-bold text-slate-900 dark:text-white">
                                         {lang === 'fa' && rate
-                                            ? `${(parseFloat(buyAmount || '0') * (rate / 10)).toLocaleString()} ${t('toman')}` // Divide by 10 for credits
+                                            ? `${(parseFloat(buyAmount || '0') * (rate / 10)).toLocaleString()} ${t('toman')}` 
                                             : `$${(parseFloat(buyAmount || '0') * (rate || 0)).toFixed(2)}`
                                         }
                                     </span>
@@ -214,7 +204,7 @@ const CreditBalanceModal: React.FC<CreditBalanceModalProps> = ({ user, onClose }
                                                 </div>
                                             </div>
                                             <div className={`font-mono font-bold ${tx.amount > 0 ? 'text-emerald-500' : 'text-slate-500'}`}>
-                                                {tx.amount > 0 ? '+' : ''}{tx.amount.toFixed(2)}
+                                                {tx.amount > 0 ? '+' : ''}{(tx.amount || 0).toFixed(2)}
                                             </div>
                                         </div>
                                     ))}

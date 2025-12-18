@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from '@supabase/supabase-js';
 import { GeneratedCode, Message, Project, Phase, BuildAudit, AIProviderConfig, AIUsageResult, ProjectFile, User, AIDebugLog } from "../types";
@@ -37,43 +36,61 @@ export const PROMPT_KEYS = {
 };
 
 export const DEFAULTS: Record<string, string> = {
-    'CLASSIFIER': `You are a strategic router. Analyze user intent.
-Output ONLY raw JSON:
+    'CLASSIFIER': `You are a strategic router for a web app builder.
+Analyze user intent and respond with a minified JSON object.
+Rules:
+1. DO NOT include any text before or after the JSON.
+2. DO NOT use markdown code blocks.
+JSON Structure:
 {
   "intent": "chat" | "build" | "repair",
   "direct_response": "Message for chat intent only"
 }`,
-    'DESIGN': `Architect the UI/UX and page structure.
-Output ONLY raw JSON:
+    'DESIGN': `Architect the UI/UX for a new project. 
+Respond with a minified JSON object.
+Rules:
+1. Always include index.html, src/main.tsx, and src/App.tsx in the architecture if they don't exist.
+2. DO NOT include any text before or after the JSON.
+JSON Structure:
 {
-  "design_language": { "theme": "modern", "colors": ["#4f46e5"] },
+  "design_language": { "theme": "modern" | "neo-brutalism" | "glassmorphism", "primary_color": "hex" },
   "pages": [ { "route": "/", "name": "Home", "sections": ["hero", "features"] } ]
 }`,
-    'PHASE_PLANNER': `Break the project into 2-4 high-level milestones.
-Output ONLY raw JSON:
+    'PHASE_PLANNER': `Break the project into milestones. 
+Respond with a minified JSON object.
+MANDATORY RULES:
+1. For NEW projects, the first phase MUST be "Project Foundation" to create index.html, src/main.tsx, and src/App.tsx.
+2. The preview CANNOT work without these files.
+JSON Structure:
 {
-  "phases": [ { "title": "Milestone Name", "goal": "Description", "type": "ui" } ]
+  "phases": [ { "title": "Milestone Name", "goal": "Description", "type": "ui" | "logic" | "backend" } ]
 }`,
-    'PLANNER': `Create a list of specific file implementation steps for the CURRENT phase.
-Output ONLY raw JSON:
+    'PLANNER': `Create implementation steps for this phase.
+Respond with a minified JSON object.
+JSON Structure:
 {
-  "steps": [ { "title": "Step Name", "path": "src/App.tsx", "description": "Details", "is_entry": true } ]
+  "steps": [ { "title": "Step Name", "path": "src/App.tsx", "description": "Specific coding instructions", "is_entry": boolean } ]
 }`,
-    'BUILDER': `Write the full source code for a specific file. 
-Output ONLY raw JSON:
+    'BUILDER': `Write code for the requested file. 
+Respond with a minified JSON object.
+CRITICAL RULES:
+1. NEVER delete or modify "index.html" in a way that removes <div id="root">.
+2. Ensure index.html always renders App.tsx through src/main.tsx.
+3. If you write large files, ensure the JSON remains valid and not truncated.
+4. Avoid tailwind.config.js; use inline Tailwind classes as the platform uses CDN Tailwind.
+JSON Structure:
 {
-  "file_changes": [ { "path": "string", "content": "Full React/Tailwind Code", "action": "create" } ]
+  "file_changes": [ { "path": "string", "content": "Full code", "action": "create" | "update" } ]
 }`,
-    'REPAIR_PLANNER': `Analyze the provided error and existing file contents. 
-Provide surgical fixes (patches) for the problematic files. 
-DO NOT rewrite the whole project. Only provide content for files that actually need a fix.
-Output ONLY raw JSON:
+    'REPAIR_PLANNER': `Surgically fix the error provided.
+Respond with a minified JSON object.
+JSON Structure:
 {
-  "patches": [ { "path": "string", "content": "Full Fixed code for this file", "action": "update" } ],
-  "explanation": "Summary of the fix"
+  "patches": [ { "path": "string", "content": "Full Fixed code", "action": "update" } ],
+  "explanation": "Summary"
 }`,
     'TITLE': `Generate a creative 2-word app name.
-Output ONLY raw JSON:
+Respond with a minified JSON object.
 { "title": "App Name" }`
 };
 
@@ -89,24 +106,83 @@ const getSystemPrompt = async (key: string): Promise<string> => {
     } catch (e) {
         console.warn(`Prompt DB fetch failed for ${key}, using default.`);
     }
-    return (DEFAULTS as any)[key] || "You are a helpful coding assistant.";
+    return (DEFAULTS as any)[key] || "You are a helpful coding assistant. Respond ONLY with valid JSON.";
 };
 
-// --- ROBUST JSON EXTRACTION ---
+// --- ROBUST JSON EXTRACTION & REPAIR ---
+
+/**
+ * Attempts to repair truncated JSON by balancing braces, brackets, and quotes.
+ */
+const repairJson = (json: string): string => {
+    let repaired = json.trim();
+    
+    // 1. Handle unclosed string property or value
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i < repaired.length; i++) {
+        if (repaired[i] === '"' && !escaped) inString = !inString;
+        escaped = repaired[i] === '\\' && !escaped;
+    }
+    if (inString) repaired += '"';
+
+    // 2. Balance braces and brackets
+    const stack: string[] = [];
+    inString = false;
+    escaped = false;
+    for (let i = 0; i < repaired.length; i++) {
+        const char = repaired[i];
+        if (char === '"' && !escaped) inString = !inString;
+        if (!inString) {
+            if (char === '{' || char === '[') stack.push(char === '{' ? '}' : ']');
+            else if (char === '}' || char === ']') {
+                if (stack.length > 0 && stack[stack.length - 1] === char) stack.pop();
+            }
+        }
+        escaped = char === '\\' && !escaped;
+    }
+
+    while (stack.length > 0) {
+        repaired += stack.pop();
+    }
+
+    return repaired;
+};
+
 const extractJson = (text: string | undefined): any => {
     if (!text) throw new Error("AI returned empty response");
-    let cleaned = text.replace(/<thought>[\s\S]*?<\/thought>/gi, "").trim();
-    cleaned = cleaned.replace(/```json/gi, "").replace(/```/g, "").trim();
-    const tryParse = (str: string) => { try { return JSON.parse(str); } catch (e) { return null; } };
-    let res = tryParse(cleaned);
-    if (res) return res;
-    const firstBrace = cleaned.indexOf('{');
-    const lastBrace = cleaned.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace > firstBrace) {
-        res = tryParse(cleaned.substring(firstBrace, lastBrace + 1));
-        if (res) return res;
+    
+    let cleaned = text
+        .replace(/<thought>[\s\S]*?<\/thought>/gi, "")
+        .replace(/\[thinking\][\s\S]*?\[\/thinking\]/gi, "")
+        .replace(/```json/gi, "")
+        .replace(/```/g, "")
+        .trim();
+    
+    cleaned = cleaned.replace(/[\u200B-\u200D\uFEFF]/g, "");
+
+    // Strategy 1: Direct Parse
+    try {
+        return JSON.parse(cleaned);
+    } catch (e) {
+        // Strategy 2: Extract block and attempt repair
+        const firstBrace = cleaned.indexOf('{');
+        const firstBracket = cleaned.indexOf('[');
+        const start = (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) ? firstBrace : firstBracket;
+        
+        if (start !== -1) {
+            // Find the last actual delimiter or just take the rest of the string
+            const potentialJson = cleaned.substring(start);
+            const repaired = repairJson(potentialJson);
+            try {
+                return JSON.parse(repaired);
+            } catch (innerError) {
+                console.error("Critical Parse Error after repair attempt:", repaired);
+                throw new Error(`Invalid JSON format: ${innerError}`);
+            }
+        }
     }
-    throw new Error("Invalid AI Response Format: Could not find parseable JSON.");
+    throw new Error("Invalid AI Response Format: Could not find or parse any JSON structure.");
 };
 
 // --- ORCHESTRATOR UTILS ---
@@ -114,23 +190,25 @@ const getActiveProvider = async (): Promise<AIProviderConfig> => {
     try {
         const active = await aiProviderService.getActiveConfig();
         if (active && active.apiKey) return active;
-        
         const fallback = await aiProviderService.getFallbackConfig();
         if (fallback && fallback.apiKey) return fallback;
-    } catch (e) {
-        console.warn("Could not fetch AI provider from database. Falling back to system default.");
-    }
-    return { id: 'google', name: 'Google Gemini (System)', isActive: true, isFallback: false, apiKey: process.env.API_KEY || '', model: 'gemini-3-flash-preview', updatedAt: Date.now() };
+    } catch (e) {}
+    // UPDATED: Use gemini-3-pro-preview for coding-related generation tasks
+    return { id: 'google', name: 'Google Gemini (System)', isActive: true, isFallback: false, apiKey: process.env.API_KEY || '', model: 'gemini-3-pro-preview', updatedAt: Date.now() };
 };
 
 const executeAIRequest = async (config: AIProviderConfig, prompt: string, systemInstruction: string, images: string[] = []): Promise<{ text: string, usage: AIUsageResult }> => {
-    if (!config.apiKey) throw new Error(`AI configuration for ${config.name} is missing an API Key. Please update it in the Admin Panel.`);
-
+    if (!config.apiKey) throw new Error(`AI configuration for ${config.name} is missing an API Key.`);
     if (config.id === 'google') {
         const ai = new GoogleGenAI({ apiKey: config.apiKey });
-        const reqConfig: any = { systemInstruction, temperature: 0.1, maxOutputTokens: 8192 };
-        if (systemInstruction.toUpperCase().includes('JSON')) reqConfig.responseMimeType = 'application/json';
-        
+        // UPDATED: Set thinkingBudget when maxOutputTokens is set for Gemini 3 series models to ensure response capacity
+        const reqConfig: any = { 
+            systemInstruction, 
+            temperature: 0.1, 
+            maxOutputTokens: 16384,
+            thinkingConfig: { thinkingBudget: 8192 },
+            responseMimeType: systemInstruction.toUpperCase().includes('JSON') ? 'application/json' : 'text/plain'
+        };
         let contents: any = prompt;
         if (images.length > 0) {
             const parts: any[] = images.map(img => {
@@ -146,17 +224,15 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
             parts.push({ text: prompt });
             contents = { parts };
         }
-
-        const response = await ai.models.generateContent({ model: config.model || 'gemini-3-flash-preview', contents, config: reqConfig });
+        // UPDATED: Ensuring default model is gemini-3-pro-preview for complex coding tasks
+        const response = await ai.models.generateContent({ model: config.model || 'gemini-3-pro-preview', contents, config: reqConfig });
         const input = Number(response.usageMetadata?.promptTokenCount || 0);
         const output = Number(response.usageMetadata?.candidatesTokenCount || 0);
-        const cost = billingService.calculateRawCost(config.model || 'gemini-3-flash-preview', input, output);
-
-        return { text: response.text || "{}", usage: { promptTokens: input, completionTokens: output, costUsd: cost, provider: 'google', model: config.model || 'gemini-3-flash-preview' } };
+        const cost = billingService.calculateRawCost(config.model || 'gemini-3-pro-preview', input, output);
+        return { text: response.text || "{}", usage: { promptTokens: input, completionTokens: output, costUsd: cost, provider: 'google', model: config.model || 'gemini-3-pro-preview' } };
     } 
     else if (config.id === 'openai') return await openaiService.generateContent(config.apiKey, config.model, prompt, systemInstruction, images);
     else if (config.id === 'claude') return await claudeService.generateContent(config.apiKey, config.model, prompt, systemInstruction, images);
-    
     throw new Error(`Unknown provider: ${config.id}`);
 };
 
@@ -177,20 +253,21 @@ const robustGenerate = async (prompt: string, systemInstruction: string, project
     }
 };
 
+// ADDED: SupervisorCallbacks interface to resolve "Cannot find name 'SupervisorCallbacks'" errors
 export interface SupervisorCallbacks {
     onPlanUpdate: (phases: Phase[]) => Promise<void>;
-    onMessage: (message: Message) => Promise<void>;
-    onBuildMessage: (logicalKey: string, message: Partial<Message>) => Promise<Message>;
-    onPhaseStart: (phaseIndex: number, phase: { key?: string; text?: string }) => Promise<void>;
-    onPhaseComplete: (phaseIndex: number) => Promise<void>;
-    onStepStart: (phaseIndex: number, step: { key?: string; text?: string; vars?: Record<string, string> }) => Promise<void>;
-    onStepComplete: (phaseIndex: number, stepName: string) => Promise<void>;
+    onMessage?: (msg: Message) => Promise<void>;
+    onBuildMessage: (key: string, message: Partial<Message>) => Promise<Message>;
+    onPhaseStart: (index: number, phase: { text: string }) => Promise<void>;
+    onPhaseComplete: (index: number) => Promise<void>;
+    onStepStart: (index: number, step: any) => Promise<void>;
+    onStepComplete: (index: number, name: string) => Promise<void>;
     onChunkComplete: (code: GeneratedCode, explanation: string, meta?: any) => Promise<void>;
     onSuccess: (code: GeneratedCode, explanation: string, audit: BuildAudit, meta?: any) => Promise<void>;
-    onError: (error: string, retries: number) => Promise<void>;
-    onFinalError: (error: string, audit?: BuildAudit) => Promise<void>;
-    waitForPreview?: (timeoutMs: number) => Promise<{success: boolean, error?: string}>;
-    onAIDebugLog?: (log: AIDebugLog, messageId?: string) => void;
+    onError: (error: string) => Promise<void>;
+    onFinalError: (error: string) => Promise<void>;
+    onAIDebugLog?: (log: AIDebugLog, logicalMessageKey: string) => void;
+    waitForPreview?: (timeoutMs: number) => Promise<{ success: boolean; error?: string }>;
 }
 
 export class GenerationSupervisor {
@@ -201,7 +278,6 @@ export class GenerationSupervisor {
     private signal?: AbortSignal;
     private lang: Language;
     private accumulatedFiles: ProjectFile[] = [];
-    private entryPath: string | null = null;
 
     constructor(project: Project, userPrompt: string, images: string[], callbacks: SupervisorCallbacks, signal?: AbortSignal, lang: Language = 'en') {
         this.project = project;
@@ -219,80 +295,75 @@ export class GenerationSupervisor {
         this.checkAbort();
         let sys = await getSystemPrompt(key);
         if (this.lang === 'fa' || /[\u0600-\u06FF]/.test(this.userPrompt)) {
-            sys = "IMPORTANT: User-facing text in JSON MUST be in Farsi.\n" + sys;
+            sys = "IMPORTANT: All user-facing strings in the JSON response MUST be in Farsi.\n" + sys;
         }
-
         this.checkAbort();
-        try {
-            const { text, usage } = await robustGenerate(prompt, sys, this.project.id, this.project.userId, key, this.images, {messageId: logicalMessageKey});
-            
-            if (this.callbacks.onAIDebugLog) {
-                this.callbacks.onAIDebugLog({
-                    id: crypto.randomUUID(), timestamp: Date.now(), stepKey: key, model: usage.model,
-                    systemInstruction: sys, prompt, response: text
-                }, logicalMessageKey);
-            }
+        const { text, usage } = await robustGenerate(prompt, sys, this.project.id, this.project.userId, key, this.images, {messageId: logicalMessageKey});
+        if (this.callbacks.onAIDebugLog) {
+            this.callbacks.onAIDebugLog({ id: crypto.randomUUID(), timestamp: Date.now(), stepKey: key, model: usage.model, systemInstruction: sys, prompt, response: text }, logicalMessageKey);
+        }
+        return extractJson(text);
+    }
 
-            return extractJson(text);
-        } catch (e: any) {
-            if (e.message === "ABORTED") throw e;
-            throw e;
+    private async ensureProjectFoundation() {
+        const foundationPaths = ['index.html', 'src/main.tsx', 'src/App.tsx'];
+        const needsBootstrap = foundationPaths.some(path => !this.accumulatedFiles.some(f => f.path === path));
+        
+        if (needsBootstrap) {
+            const defaults = [
+                { path: 'index.html', content: '<!DOCTYPE html><html><head><meta charset="UTF-8" /><title>App</title></head><body><div id="root"></div></body></html>', type: 'file' as const },
+                { path: 'src/main.tsx', content: 'import React from "react";\nimport { createRoot } from "react-dom/client";\nimport App from "./App";\nconst root = document.getElementById("root");\nif (root) createRoot(root).render(<App />);', type: 'file' as const },
+                { path: 'src/App.tsx', content: 'import React from "react";\nexport default function App() { return <div className="p-8"><h1>Initializing App...</h1></div>; }', type: 'file' as const }
+            ];
+            
+            for (const def of defaults) {
+                if (!this.accumulatedFiles.some(f => f.path === def.path)) {
+                    this.accumulatedFiles.push(def);
+                }
+            }
+            await this.callbacks.onChunkComplete(this.project.code, "Established project foundation.", { files: this.accumulatedFiles });
         }
     }
 
     public async start(isResume: boolean = false) {
         try {
             this.checkAbort();
-            
-            // 1. CLASSIFIER
-            const classMsgId = (await this.callbacks.onBuildMessage('classifier', { type: 'build_status', content: "Strategizing approach...", status: 'working', icon: 'loader' })).id;
-            const classification = await this.runStep('CLASSIFIER', `User Prompt: ${this.userPrompt}`, classMsgId);
+            if (!isResume) await this.ensureProjectFoundation();
 
+            const classMsgId = (await this.callbacks.onBuildMessage('classifier', { type: 'build_status', content: "Strategizing build approach...", status: 'working', icon: 'loader', startTime: Date.now() })).id;
+            const classification = await this.runStep('CLASSIFIER', `User Prompt: ${this.userPrompt}`, classMsgId);
             if (classification.intent === 'chat') {
                 await this.callbacks.onBuildMessage('classifier', { id: classMsgId, type: 'assistant_response', content: classification.direct_response, status: 'completed' });
                 await this.callbacks.onSuccess(this.project.code, "Chat complete.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
                 return;
             }
+            await this.callbacks.onBuildMessage('classifier', { id: classMsgId, status: 'completed', content: "Build strategy defined." });
 
-            // Close classification and start design
-            await this.callbacks.onBuildMessage('classifier', { id: classMsgId, status: 'completed', content: "Strategy defined." });
+            const designMsgId = (await this.callbacks.onBuildMessage('design', { type: 'build_status', content: "Designing architecture & UI...", status: 'working', icon: 'loader', startTime: Date.now() })).id;
+            const designSpec = await this.runStep('DESIGN', `Request: ${this.userPrompt}\nExisting Files: ${this.accumulatedFiles.map(f=>f.path).join(',')}`, designMsgId);
+            await this.callbacks.onBuildMessage('design', { id: designMsgId, status: 'completed', content: "Application architecture designed." });
 
-            // 2. DESIGN & ARCHITECTURE
-            const designMsgId = (await this.callbacks.onBuildMessage('design', { type: 'build_status', content: "Designing architecture...", status: 'working', icon: 'loader' })).id;
-            const designSpec = await this.runStep('DESIGN', `Request: ${this.userPrompt}\nFiles: ${this.accumulatedFiles.map(f=>f.path).join(',')}`, designMsgId);
-            
-            // Close design and start phase planning
-            await this.callbacks.onBuildMessage('design', { id: designMsgId, status: 'completed', content: "Architecture designed." });
-
-            // 3. PHASE PLANNING
-            const phasePlanMsgId = (await this.callbacks.onBuildMessage('phases_planning', { type: 'build_status', content: "Planning milestones...", status: 'working', icon: 'loader' })).id;
+            const phasePlanMsgId = (await this.callbacks.onBuildMessage('phases_planning', { type: 'build_status', content: "Planning development milestones...", status: 'working', icon: 'loader', startTime: Date.now() })).id;
             const phaseRes = await this.runStep('PHASE_PLANNER', JSON.stringify({ request: this.userPrompt, design: designSpec }), phasePlanMsgId);
             const phases: Phase[] = phaseRes.phases.map((p: any) => ({ id: crypto.randomUUID(), title: p.title, description: p.goal, status: 'pending', retryCount: 0, type: p.type || 'ui' }));
             await this.callbacks.onPlanUpdate(phases);
-            
-            // Close phase planning
             await this.callbacks.onBuildMessage('phases_planning', { id: phasePlanMsgId, status: 'completed', content: `${phases.length} milestones planned.` });
 
-            // 4. EXECUTION
             for (let i = 0; i < phases.length; i++) {
                 const phase = phases[i];
                 if (isResume && phase.status === 'completed') continue;
-                
                 await this.callbacks.onPhaseStart(i, { text: phase.title });
-                const phaseMsgId = (await this.callbacks.onBuildMessage(`phase_${i}`, { type: 'build_phase', content: `Building Milestone: ${phase.title}`, status: 'working' })).id;
-                
+                const phaseMsgId = (await this.callbacks.onBuildMessage(`phase_${i}`, { type: 'build_phase', content: `Building Milestone: ${phase.title}`, status: 'working', startTime: Date.now() })).id;
                 const stepsRes = await this.runStep('PLANNER', JSON.stringify({ phase, design: designSpec }), phaseMsgId);
                 const steps = stepsRes.steps || [];
-
                 for (let j = 0; j < steps.length; j++) {
                     const step = steps[j];
                     await this.callbacks.onBuildMessage(`phase_${i}`, { id: phaseMsgId, currentStepProgress: { current: j + 1, total: steps.length, stepName: step.title } });
-                    
-                    const builderRes = await this.runStep('BUILDER', JSON.stringify({ task: step.description, path: step.path, design: designSpec, files: this.accumulatedFiles.map(f=>({path:f.path, content: f.content.substring(0, 500)})) }), phaseMsgId);
-                    
+                    const builderRes = await this.runStep('BUILDER', JSON.stringify({ task: step.description, path: step.path, design: designSpec, context_files: this.accumulatedFiles.map(f=>({path:f.path, content: f.content.substring(0, 1000)})) }), phaseMsgId);
                     if (builderRes.file_changes) {
                         for (const change of builderRes.file_changes) {
                             const cleanPath = change.path.replace(/^\//, '');
+                            if (cleanPath === 'index.html' && (change.action === 'delete' || !change.content.includes('id="root"'))) continue;
                             const idx = this.accumulatedFiles.findIndex(f => f.path === cleanPath);
                             const content = sanitizeFileContent(change.content, cleanPath);
                             if (idx !== -1) this.accumulatedFiles[idx].content = content;
@@ -305,49 +376,31 @@ export class GenerationSupervisor {
                 await this.callbacks.onPhaseComplete(i);
                 await this.callbacks.onBuildMessage(`phase_${i}`, { id: phaseMsgId, status: 'completed' });
             }
-
             await this.callbacks.onSuccess(this.project.code, "Build complete.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
-
         } catch (e: any) {
-            if (e.message !== "ABORTED") {
-                await this.callbacks.onFinalError(e.message || "An unexpected error occurred during build.");
-            }
+            if (e.message !== "ABORTED") await this.callbacks.onFinalError(e.message || "An unexpected error occurred.");
         }
     }
 
     public async repair(error: string) {
-        const msgId = (await this.callbacks.onBuildMessage('repair', { type: 'build_status', content: "Analyzing runtime error...", status: 'working', icon: 'wrench' })).id;
+        const msgId = (await this.callbacks.onBuildMessage('repair', { type: 'build_status', content: "Analyzing error and planning fix...", status: 'working', icon: 'wrench', startTime: Date.now() })).id;
         try {
-            const res = await this.runStep('REPAIR_PLANNER', JSON.stringify({ 
-                error, 
-                files: this.accumulatedFiles.map(f=>({path: f.path, content: f.content.substring(0, 2000)})) 
-            }), msgId);
-
+            const res = await this.runStep('REPAIR_PLANNER', JSON.stringify({ error, files: this.accumulatedFiles.map(f=>({path: f.path, content: f.content.substring(0, 2000)})) }), msgId);
             if (res.patches) {
                 for (const patch of res.patches) {
                     const cleanPath = patch.path.replace(/^\//, '');
+                    if (cleanPath === 'index.html' && (patch.action === 'delete' || !patch.content.includes('id="root"'))) continue;
                     const idx = this.accumulatedFiles.findIndex(f => f.path === cleanPath);
                     const sanitized = sanitizeFileContent(patch.content, cleanPath);
-                    
-                    if (idx !== -1) {
-                        this.accumulatedFiles[idx].content = sanitized;
-                    } else {
-                        this.accumulatedFiles.push({ 
-                            path: cleanPath, 
-                            content: sanitized, 
-                            type: 'file' 
-                        });
-                    }
+                    if (idx !== -1) this.accumulatedFiles[idx].content = sanitized;
+                    else this.accumulatedFiles.push({ path: cleanPath, content: sanitized, type: 'file' });
                 }
-                await this.callbacks.onChunkComplete(this.project.code, "Applied surgical fix", { files: this.accumulatedFiles });
+                await this.callbacks.onChunkComplete(this.project.code, "Applied fix", { files: this.accumulatedFiles });
             }
-            
-            await this.callbacks.onBuildMessage('repair', { id: msgId, status: 'completed', content: "Error fixed successfully." });
+            await this.callbacks.onBuildMessage('repair', { id: msgId, status: 'completed', content: "Issue resolved successfully." });
             await this.callbacks.onSuccess(this.project.code, "Healed.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
         } catch (e: any) {
-            if (e.message !== "ABORTED") {
-                await this.callbacks.onFinalError("Repair failed: " + e.message);
-            }
+            if (e.message !== "ABORTED") await this.callbacks.onFinalError("Repair failed: " + e.message);
         }
     }
 }
@@ -358,7 +411,7 @@ export const generateProjectTitle = async (prompt: string, user: User, project: 
         const config = await getActiveProvider();
         const { text } = await executeAIRequest(config, `Request: ${prompt}`, sys);
         const json = extractJson(text);
-        return json.title || "My AI App";
+        return json.title || "New Project";
     } catch (e) { return "New Project"; }
 };
 

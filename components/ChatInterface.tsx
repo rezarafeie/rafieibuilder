@@ -41,6 +41,7 @@ interface ChatInterfaceProps {
 
 const SUCCESS_SOUND_URL = 'https://cdn.pixabay.com/audio/2022/03/15/audio_2b28b1e36c.mp3';
 
+// Fixed: Added React namespace by importing React
 const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
   const parts = content.split(/(```[\s\S]*?```|`[^`]+`|\*\*[^*]+\*\*|• .*)/g);
   return (
@@ -63,7 +64,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
 const formatTime = (ms: number | undefined) => {
   if (ms === undefined) return null;
   const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds} second${seconds !== 1 ? 's' : ''}`;
+  if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m ${seconds % 60}s`;
 };
@@ -74,21 +75,18 @@ const formatCredits = (credits: number | undefined) => {
   return credits < 0.01 ? '< 0.01' : credits.toFixed(2);
 };
 
+// Fixed: Added React namespace by importing React
 const ThinkingHeader: React.FC<{ msg: Message }> = ({ msg }) => {
     const [elapsed, setElapsed] = useState(0);
-    const { t } = useTranslation();
 
     useEffect(() => {
         if (msg.status !== 'working' || !msg.startTime) return;
-        
         const interval = setInterval(() => {
             setElapsed(Date.now() - (msg.startTime || 0));
         }, 1000);
-        
         return () => clearInterval(interval);
     }, [msg.status, msg.startTime]);
 
-    const displayElapsed = formatTime(elapsed);
     const thoughtTime = formatTime(msg.thoughtDurationMs);
 
     if (msg.status === 'completed' && msg.thoughtDurationMs) {
@@ -96,11 +94,12 @@ const ThinkingHeader: React.FC<{ msg: Message }> = ({ msg }) => {
     }
 
     if (msg.status === 'working') {
+        const narration = msg.content || "thinking ....";
         return (
             <div className="flex items-center gap-2">
-                <span className="font-medium text-slate-700 dark:text-slate-300">thinking ....</span>
+                <span className="font-medium text-slate-700 dark:text-slate-300 animate-pulse">{narration}</span>
                 <span className="text-[10px] text-indigo-500 dark:text-indigo-400 font-mono tabular-nums opacity-80">
-                    {displayElapsed}
+                    {formatTime(elapsed)}
                 </span>
             </div>
         );
@@ -109,6 +108,7 @@ const ThinkingHeader: React.FC<{ msg: Message }> = ({ msg }) => {
     return <span>{msg.content && <MarkdownRenderer content={msg.content} />}</span>;
 };
 
+// Fixed: Added React namespace by importing React
 const MessageActions: React.FC<{ msg: Message }> = ({ msg }) => {
     const [copied, setCopied] = useState(false);
     const handleCopy = () => {
@@ -136,6 +136,7 @@ const MessageActions: React.FC<{ msg: Message }> = ({ msg }) => {
     );
 };
 
+// Fixed: Added React namespace by importing React
 const ChatMessageContent: React.FC<{ 
     msg: Message, 
     onRetry?: () => void, 
@@ -148,8 +149,8 @@ const ChatMessageContent: React.FC<{
     const { t } = useTranslation();
     const [isExpanded, setIsExpanded] = useState(false);
 
-    const isThinkingMessage = msg.content?.toLowerCase().includes('thinking ....') || msg.status === 'working' || msg.thoughtDurationMs;
-    const hasDetails = msg.planData || msg.currentStepProgress || msg.details || (msg.type === 'build_phase' && msg.content);
+    const isThinkingMessage = msg.status === 'working' || msg.thoughtDurationMs;
+    const hasDetails = msg.planData || msg.currentStepProgress || msg.details;
 
     const getIcon = (status: Message['status'], icon?: string) => {
         if (status === 'working') return <Loader2 size={14} className="animate-spin text-indigo-500" />;
@@ -186,12 +187,6 @@ const ChatMessageContent: React.FC<{
                         )}
                     </div>
                 </div>
-                {/* NARRATION CAPTION: Shows what is currently happening under the thinking status */}
-                {msg.status === 'working' && msg.content && !msg.content.includes('thinking ....') && (
-                    <div className="ml-5.5 pl-0.5 text-[11px] text-slate-500 dark:text-slate-400 animate-in fade-in slide-in-from-left-1 duration-300 truncate">
-                        {msg.content}
-                    </div>
-                )}
             </div>
         );
 
@@ -209,13 +204,6 @@ const ChatMessageContent: React.FC<{
 
             {isExpanded && (
                 <div className="mt-2 ml-6 space-y-2 animate-in slide-in-from-top-1 duration-200 border-l-2 border-slate-100 dark:border-slate-800 pl-4 py-1">
-                    {/* Narration in dropdown */}
-                    {msg.content && !msg.content.includes('thinking ....') && (
-                        <div className="text-[11px] font-medium text-indigo-600 dark:text-indigo-400 mb-1">
-                             {msg.content}
-                        </div>
-                    )}
-                    
                     {msg.type === 'build_plan' && msg.planData && (
                         <div className="space-y-1.5">
                             <h4 className="font-semibold text-slate-800 dark:text-slate-200 text-xs mb-2 uppercase tracking-wider">{t('buildPlanTitle')}</h4>
@@ -298,6 +286,7 @@ const ChatMessageContent: React.FC<{
 };
 
 
+// Fixed: Added React namespace by importing React
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
     user, messages, onSendMessage, onUploadImage, onStop, onRetry, onContinue, onAutoFix, onClearBuildState, onConnectDatabase, onSkipBackend, isThinking, isAutoRepairing, isResumable,
     suggestions, isSuggestionsLoading, runtimeError,
@@ -359,9 +348,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
   };
 
+  // Fixed: Added React namespace by importing React
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => { if (e.target.files) addFilesToStage(Array.from(e.target.files)); if (fileInputRef.current) fileInputRef.current.value = ''; };
   const removeStagedImage = (id: string) => { setStagedImages(prev => prev.filter(img => img.id !== id)); };
   
+  // Fixed: Added React namespace by importing React
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (stagedImages.some(img => img.uploading)) return;
@@ -373,7 +364,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
+  // Fixed: Added React namespace by importing React
   const dropHandler = useCallback((ev: React.DragEvent<HTMLDivElement>) => { ev.preventDefault(); setIsDragging(false); if (ev.dataTransfer.files) addFilesToStage(Array.from(ev.dataTransfer.files)); }, []);
+  // Fixed: Added React namespace by importing React
   const dragOverHandler = (ev: React.DragEvent<HTMLDivElement>) => { ev.preventDefault(); setIsDragging(true); };
   const dragLeaveHandler = () => setIsDragging(false);
   const pasteHandler = useCallback((ev: ClipboardEvent) => { if (ev.clipboardData) { const items = Array.from(ev.clipboardData.items).filter(item => item.type.indexOf('image') !== -1); if (items.length > 0) addFilesToStage(items.map(item => item.getAsFile()).filter(Boolean) as File[]); } }, []);

@@ -108,7 +108,6 @@ const CloudDetailsModal: React.FC<{
     );
 };
 
-// Intersection Observer Hook for Lazy Loading
 const useInView = (options: IntersectionObserverInit) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [isVisible, setIsVisible] = useState(false);
@@ -260,7 +259,6 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, view }) => {
   const [trashCount, setTrashCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
-  const [isConnectingCloud, setIsConnectingCloud] = useState(false);
   const [isSystemOnline, setIsSystemOnline] = useState(true);
   
   // Pagination State
@@ -316,14 +314,11 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, view }) => {
             
             setHasMore(fetched.length === PROJECTS_PER_PAGE);
 
-            // Always verify global stats on initial load or re-sync
             if (!isLoadMore) {
                 const count = await cloudService.getTrashCount(user.id);
                 setTrashCount(count);
-                if (currentBalance === -1) {
-                    const balance = await cloudService.getUserCredits(user.id);
-                    setCurrentBalance(balance);
-                }
+                const balance = await cloudService.getUserCredits(user.id);
+                setCurrentBalance(balance);
             }
         };
 
@@ -344,20 +339,16 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, view }) => {
     }
   };
 
-  // Reset on view change
   useEffect(() => {
     setProjects([]);
     setHasMore(true);
     fetchData(false);
   }, [user.id, view]);
 
-  // Subscription for updates (Realtime)
   useEffect(() => {
     const { unsubscribe } = cloudService.subscribeToUserProjects(user.id, () => {
         if (debounceRef.current) clearTimeout(debounceRef.current);
         debounceRef.current = setTimeout(() => {
-            // Re-fetch only the first page to ensure fresh data at the top, or refresh current list.
-            // For simplicity and correctness with "latest at top", we refresh from scratch.
             fetchData(false);
         }, 1000);
     });
@@ -440,9 +431,6 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, view }) => {
       cloudService.saveUserLanguage(user.id, newLang).catch(console.error);
   };
 
-  const rafieiCloudProject: RafieiCloudProject | undefined = undefined; 
-  const customBackendConfig: any = undefined; 
-
   const greeting = (() => {
       const hour = new Date().getHours();
       if (hour < 12) return t('goodMorning');
@@ -464,8 +452,6 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, view }) => {
         {showCloudDetails && (
             <CloudDetailsModal 
                 onClose={() => setShowCloudDetails(false)}
-                rafieiProject={rafieiCloudProject}
-                customConfig={customBackendConfig}
                 onDisconnect={handleDisconnect}
                 navigate={navigate}
             />
@@ -508,7 +494,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, view }) => {
                             <div className="h-4 w-12 bg-emerald-200/50 dark:bg-emerald-900/50 rounded animate-pulse"></div>
                         ) : (
                             <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300">
-                                {Number(currentBalance).toFixed(2)}
+                                {(Number(currentBalance) || 0).toFixed(2)}
                             </span>
                         )}
                     </button>

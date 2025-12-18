@@ -203,6 +203,21 @@ export const cloudService = {
             return updatedMessages.find(m => m.id === msgId)!;
         };
 
+        const failAllPending = async () => {
+            let updatedMessages = [...currentProject.messages];
+            let changed = false;
+            updatedMessages = updatedMessages.map(m => {
+                if (m.status === 'working') {
+                    changed = true;
+                    return { ...m, status: 'failed' as const };
+                }
+                return m;
+            });
+            if (changed) {
+                updateLocalState({ messages: updatedMessages });
+            }
+        };
+
         const supervisor = new GenerationSupervisor(currentProject, prompt, images.map(i => i.base64 || i.url), {
             onPlanUpdate: async (phases) => { 
                 updateLocalState({ buildState: { ...currentProject.buildState!, phases } }); 
@@ -238,6 +253,7 @@ export const cloudService = {
             },
             onFinalError: async (err) => { 
                 if (err !== "ABORTED") {
+                    await failAllPending();
                     updateLocalState({ status: 'failed' }); 
                     await createOrUpdateBuildMessage('fatal_error', { type: 'build_error', content: `The build process encountered an error: ${err}. Please try again or adjust your prompt.`, status: 'failed', icon: 'alert-triangle' });
                     this.saveProject(currentProject).catch(console.error);
@@ -247,6 +263,7 @@ export const cloudService = {
 
         supervisor.start(isResume).catch(async (e) => {
              if (e.message !== "ABORTED") {
+                await failAllPending();
                 await createOrUpdateBuildMessage('orchestrator_crash', { type: 'build_error', content: `Build process interrupted: ${e.message}`, status: 'failed' });
              }
         });
@@ -264,16 +281,29 @@ export const cloudService = {
             return currentProject;
         };
 
+        const failAllPending = async () => {
+            let updatedMessages = [...currentProject.messages];
+            let changed = false;
+            updatedMessages = updatedMessages.map(m => {
+                if (m.status === 'working') {
+                    changed = true;
+                    return { ...m, status: 'failed' as const };
+                }
+                return m;
+            });
+            if (changed) {
+                updateLocalState({ messages: updatedMessages });
+            }
+        };
+
         const supervisor = new GenerationSupervisor(currentProject, "", [], {
             onBuildMessage: async (k, m) => { 
-                // Minimal implementation for repair status messages
                 const msgId = crypto.randomUUID();
                 const updatedMessages = [...currentProject.messages, { id: msgId, role: 'assistant', timestamp: Date.now(), ...m } as Message];
                 updateLocalState({ messages: updatedMessages });
                 return updatedMessages[updatedMessages.length - 1]; 
             },
             onChunkComplete: async (c, e, m) => {
-                // Ensure we merge files correctly
                 updateLocalState({ files: m?.files || currentProject.files });
             },
             onSuccess: async (code, exp, audit, meta) => {
@@ -281,13 +311,16 @@ export const cloudService = {
                 this.saveProject(currentProject).catch(console.error);
             },
             onFinalError: async (err) => {
+                await failAllPending();
                 updateLocalState({ status: 'failed' });
             },
             onPlanUpdate: async () => {}, onMessage: async () => {}, onPhaseStart: async () => {}, onPhaseComplete: async () => {}, onStepStart: async () => {}, onStepComplete: async () => {}, onError: async () => {},
             waitForPreview
         }, signal);
 
-        supervisor.repair(error).catch(console.error);
+        supervisor.repair(error).catch(async (e) => {
+            await failAllPending();
+        });
     },
 
     stopBuild(projectId: string) { if (this.abortController) { this.abortController.abort(); this.abortController = null; } },
