@@ -208,7 +208,7 @@ const ProjectCard = React.memo(({ project, view, actionId, onSoftDelete, onResto
 
             <div className="flex items-start justify-between px-1">
                 <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-8 h-8 rounded-full bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-xs font-bold border border-indigo-100 dark:border-indigo-500/20 shrink-0">
+                    <div className="w-8 h-8 rounded-full bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-xs font-bold border border-indigo-100 dark:border-indigo-500/20 shrink-0 overflow-hidden">
                         {user.avatar ? <img src={user.avatar} className="w-full h-full object-cover" /> : user.name.charAt(0).toUpperCase()}
                     </div>
                     <div className="min-w-0">
@@ -264,7 +264,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, view }) => {
   // Pagination State
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const PROJECTS_PER_PAGE = 6;
+  const PROJECTS_PER_PAGE = 2;
   
   const [currentBalance, setCurrentBalance] = useState(user.credits_balance);
   const [actionId, setActionId] = useState<string | null>(null);

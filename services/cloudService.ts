@@ -221,14 +221,27 @@ export const cloudService = {
             let updatedMessages = [...currentProject.messages];
             let changed = false;
             updatedMessages = updatedMessages.map(m => {
-                if (m.status === 'working') {
+                if (m.status === 'working' || m.status === 'pending') {
                     changed = true;
-                    return { ...m, status: 'failed' as const };
+                    return { ...m, status: 'failed' as const, content: m.content + " [Stopped]" };
                 }
                 return m;
             });
+            
+            // Fix Phases
+            let updatedBuildState = currentProject.buildState ? { ...currentProject.buildState } : null;
+            if (updatedBuildState && updatedBuildState.phases) {
+                 updatedBuildState.phases = updatedBuildState.phases.map(p => {
+                     if (p.status === 'active') {
+                         changed = true;
+                         return { ...p, status: 'failed' as const };
+                     }
+                     return p;
+                 });
+            }
+
             if (changed) {
-                updateLocalState({ messages: updatedMessages });
+                updateLocalState({ messages: updatedMessages, buildState: updatedBuildState || undefined });
             }
         };
 
@@ -297,7 +310,11 @@ export const cloudService = {
         }, signal, lang as Language);
 
         supervisor.start(isResume).catch(async (e) => {
-             if (e.message !== "ABORTED") {
+             if (e.message === "ABORTED" || e.message.includes("ABORTED")) {
+                await failAllPending();
+                updateLocalState({ status: 'idle' }); 
+                this.saveProject(currentProject).catch(console.error);
+             } else {
                 await failAllPending();
                 await createOrUpdateBuildMessage('orchestrator_crash', { type: 'build_error', content: `Build process interrupted: ${e.message}`, status: 'failed' });
              }

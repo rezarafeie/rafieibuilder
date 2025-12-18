@@ -337,30 +337,69 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
   const handleStop = async () => {
     isUserStoppedRef.current = true;
-    if (isConnectingCloud && project?.rafieiCloudProject) {
-        rafieiCloudService.cancelMonitoring(project.rafieiCloudProject.id);
+    
+    // 1. Abort the underlying service immediately
+    cloudService.stopBuild(project?.id || '');
+
+    if (project) {
+        // 2. Cleanup Resume State
+        if (projectId) localStorage.removeItem(`pending_prompt_${projectId}`);
         setPendingPrompt(null);
         connectingRef.current = false;
-        const cancelMsg: Message = { 
-            id: crypto.randomUUID(), 
-            role: 'assistant', 
-            type: 'build_status',
-            content: t('cloudConnectionCancelled'), 
-            status: 'failed',
-            icon: 'x',
-            timestamp: Date.now() 
+
+        // Stop Cloud Monitoring if active
+        if (isConnectingCloud && project.rafieiCloudProject) {
+             rafieiCloudService.cancelMonitoring(project.rafieiCloudProject.id);
+        }
+        
+        // 3. Force update local messages to stop spinners (set working/pending -> failed)
+        const updatedMessages = project.messages.map(msg => {
+            if (msg.status === 'working' || msg.status === 'pending') {
+                return { ...msg, status: 'failed' as const, content: msg.content + " (Stopped by user)" };
+            }
+            return msg;
+        });
+
+        // Ensure we don't leave the conversation in a state that looks like a fresh start (single user message)
+        if (updatedMessages.length > 0 && updatedMessages[updatedMessages.length - 1].role === 'user') {
+             updatedMessages.push({
+                 id: crypto.randomUUID(),
+                 role: 'assistant',
+                 type: 'build_status',
+                 content: 'Build stopped by user.',
+                 status: 'failed',
+                 icon: 'x',
+                 timestamp: Date.now()
+             });
+        }
+
+        // 4. Force update build phases to stop spinners (set active -> failed)
+        let updatedBuildState = project.buildState;
+        if (updatedBuildState && updatedBuildState.phases) {
+             updatedBuildState = {
+                 ...updatedBuildState,
+                 phases: updatedBuildState.phases.map(p => {
+                     if (p.status === 'active') return { ...p, status: 'failed' as const };
+                     return p;
+                 })
+             };
+        }
+
+        // 5. Construct Stopped Project State
+        const stoppedProject: Project = { 
+            ...project, 
+            status: 'idle', 
+            messages: updatedMessages,
+            buildState: updatedBuildState,
+            updatedAt: Date.now() 
         };
-        const updated = { ...project, rafieiCloudProject: undefined, messages: [...project.messages, cancelMsg], updatedAt: Date.now() };
-        setProject(updated);
-        setBuildState(null);
-        await cloudService.saveProject(updated);
-        return;
-    }
-    if (isBuilding && project) {
-        cloudService.stopBuild(project.id);
-        const stopped = { ...project, status: 'idle' as const, updatedAt: Date.now() };
-        setProject(stopped);
-        cloudService.saveProject(stopped);
+
+        // 6. Apply state immediately
+        setProject(stoppedProject);
+        setBuildState(updatedBuildState);
+        
+        // 7. Persist to DB to ensure reloading page sees stopped state
+        await cloudService.saveProject(stoppedProject);
     }
   };
 
@@ -481,6 +520,36 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
       await handleSendMessage(skipMessage, previousImages, project, false, false, true);
   };
 
+  // --- NEW FIX PREVIEW HANDLER ---
+  const handleFixPreview = async () => {
+      if (!project) return;
+      
+      // 1. Insert "Thinking" message to show immediate feedback in chat
+      const thinkingMsg: Message = {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          type: 'build_status',
+          content: "Fixing preview: Detecting missing entry point...",
+          status: 'working',
+          icon: 'loader',
+          timestamp: Date.now()
+      };
+      
+      const updatedProject = { ...project, messages: [...project.messages, thinkingMsg] };
+      setProject(updatedProject);
+      
+      // 2. Trigger the fix via a synthesized prompt
+      // This will use the existing AI pipeline to modify the files.
+      // The GenerationSupervisor handles "Completion" automatically.
+      const prompt = "URGENT: The preview is blank. The index.html file is likely missing the script tag to load the React entry point, or the entry point (main.tsx) is not mounting to 'root'. Please regenerate index.html with <script type='module' src='/src/main.tsx'></script> and ensure main.tsx renders to 'root'.";
+      
+      // Use handleSendMessage but mark it as a system-triggered fix (hidden user message)
+      // Actually, standard handleSendMessage works fine, just need to ensure the user message isn't confusing.
+      // We'll call the underlying build trigger directly or use handleSendMessage with a flag?
+      // Re-using handleSendMessage is safest to maintain state consistency.
+      await handleSendMessage(prompt, [], updatedProject, false, true); // true = isAutoFix
+  };
+
   const handleManualDeployStart = () => {
       setIsManualDeploying(true);
       setManualDeployError(null);
@@ -531,7 +600,8 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
 
     let updatedProject = currentProject;
 
-    if (!isInitialAutoStart && !isHidden && !isResume) {
+    // Only add user message if NOT a system auto-fix
+    if (!isInitialAutoStart && !isHidden && !isResume && !isAutoFix) {
         const userMsg: Message = {
             id: crypto.randomUUID(),
             role: 'user',
@@ -577,7 +647,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
     setBuildState(newBuildState);
 
     // NON-BLOCKING TITLE GENERATION
-    if (!isResume && updatedProject.messages.filter(m => m.role === 'user').length === 1) {
+    if (!isResume && !isAutoFix && updatedProject.messages.filter(m => m.role === 'user').length === 1) {
         generateProjectTitle(content, user, updatedProject).then(title => {
             if (title && title !== "New Project") {
                 // Update local ref immediately to prevent overwrites
@@ -865,6 +935,7 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                             active={!isMobile || mobileTab === 'preview'}
                             externalUrl={previewUrl}
                             project={project}
+                            onFixPreview={handleFixPreview}
                         />
                     ) : (
                         <CodeEditor 

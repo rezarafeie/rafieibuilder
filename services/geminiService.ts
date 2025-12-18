@@ -437,8 +437,15 @@ export class GenerationSupervisor {
 
     private applyChange(change: { path: string, content: string, action?: string }) {
         if (!change.content || !change.path) return;
-        const cleanPath = change.path.replace(/^\//, '');
-        if (cleanPath === 'index.html' && !change.content.includes('id="root"')) return;
+        // Robust normalization to handle ./, /, src/ etc consistently
+        const cleanPath = change.path.trim().replace(/^\.?\//, '');
+        
+        // Relaxed index.html check. Only skip if content is empty or obviously wrong.
+        // Supporting both single and double quotes for id attribute
+        if (cleanPath === 'index.html' && !/id=["']root["']/.test(change.content)) {
+             console.warn("Skipping index.html update: Missing id='root'");
+             return;
+        }
         
         const idx = this.accumulatedFiles.findIndex(f => f.path === cleanPath);
         const content = sanitizeFileContent(change.content, cleanPath);

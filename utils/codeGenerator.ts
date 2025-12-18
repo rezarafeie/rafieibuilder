@@ -154,7 +154,11 @@ export const normalizeFiles = (files: ProjectFile[]): { files: ProjectFile[], en
 
     // MANDATORY: index.html must exist and must not be empty/corrupt
     const indexHtml = fileMap.get('index.html');
-    if (!indexHtml || !indexHtml.content.includes('id="root"')) {
+    
+    // Improved check: Allow 'id="root"' or "id='root'"
+    const hasRoot = indexHtml && (indexHtml.content.includes('id="root"') || indexHtml.content.includes("id='root'"));
+    
+    if (!indexHtml || !hasRoot) {
         fileMap.set('index.html', { path: 'index.html', content: DEFAULT_INDEX_HTML, type: 'file', language: 'html' });
     }
 
@@ -291,7 +295,19 @@ export const constructMultiFileDocument = (rawFiles: ProjectFile[], projectId?: 
           } catch (e) { window.onerror('Compilation Error in ' + finalPath + ': ' + e.message, finalPath, 0, 0, e); throw e; }
           return module.exports;
       }
-      window.addEventListener('DOMContentLoaded', () => { try { ${entryScript} } catch (e) { console.error(e); } });
+      
+      window.addEventListener('DOMContentLoaded', () => { 
+        try { 
+            ${entryScript}
+            // Watch for React mount
+            setTimeout(() => {
+                const root = document.getElementById('root');
+                if (root && root.innerHTML.trim().length > 0) {
+                    window.parent.postMessage({ type: 'APP_MOUNTED' }, '*');
+                }
+            }, 1000);
+        } catch (e) { console.error(e); } 
+      });
     </script>
   `;
   return baseHtmlContent.replace(/<\/body>/i, `${injectedScripts}</body>`);

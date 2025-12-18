@@ -2,7 +2,7 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { GeneratedCode, ProjectFile, Project } from '../types';
 import { constructFullDocument } from '../utils/codeGenerator';
-import { Loader2, RefreshCw, Eye, ExternalLink } from 'lucide-react';
+import { Loader2, RefreshCw, Eye, ExternalLink, Wrench } from 'lucide-react';
 
 interface PreviewCanvasProps {
   code: GeneratedCode | null;
@@ -16,6 +16,7 @@ interface PreviewCanvasProps {
   active?: boolean; // Optimization: Pause updates when hidden
   externalUrl?: string; // Optional: External deployment URL (Vercel)
   project?: Project | null; // Pass full project for context injection
+  onFixPreview?: () => void; // New prop for fixing blank screens
 }
 
 const fixingMessages = [
@@ -42,13 +43,18 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
     projectId, 
     active = true, 
     externalUrl,
-    project
+    project,
+    onFixPreview
 }) => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [hasRuntimeError, setHasRuntimeError] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [showErrorDetails, setShowErrorDetails] = useState(false);
+  
+  // Blank Screen Detection State
+  const [isAppMounted, setIsAppMounted] = useState(false);
+  const [showFixButton, setShowFixButton] = useState(false);
   
   // Memoize document string matching Dashboard logic exactly
   const docString = useMemo(() => {
@@ -73,6 +79,10 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
                 onRuntimeError(event.data.message);
             }
         }
+        if (event.data && event.data.type === 'APP_MOUNTED') {
+            setIsAppMounted(true);
+            setShowFixButton(false);
+        }
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
@@ -83,22 +93,50 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
           setIsLoading(true);
           setHasRuntimeError(false);
           setShowErrorDetails(false);
+          setIsAppMounted(false);
+          setShowFixButton(false);
       }
   }, [isGenerating, isUpdating, active]);
+
+  useEffect(() => {
+      // Reset mount state when code changes
+      setIsAppMounted(false);
+      setShowFixButton(false);
+      
+      // Start a timer to check for blank screen
+      if (!isGenerating && !isUpdating && active && !externalUrl) {
+          const timer = setTimeout(() => {
+              // Check ref state via closure might be stale, relying on state update triggering re-render
+              // But here we rely on the effect cleanup or subsequent updates.
+              // We check if state is still false.
+              // Note: We can't access current state inside timeout easily without ref, 
+              // but since setIsAppMounted sets state, we can use a functional update or just check logic.
+              // Actually, simplified: If 4 seconds pass and no APP_MOUNTED event, show button.
+              // We use a separate state variable managed by this effect to verify "time passed".
+              setShowFixButton(prev => !isAppMounted); // Only if not mounted yet
+          }, 4000);
+          return () => clearTimeout(timer);
+      }
+  }, [docString, isGenerating, isUpdating, active, externalUrl, reloadKey]);
+
+  // If app mounts, ensure button hides immediately
+  useEffect(() => {
+      if (isAppMounted) setShowFixButton(false);
+  }, [isAppMounted]);
 
   const handleReload = () => {
     setIsLoading(true);
     setReloadKey(prev => prev + 1);
     setHasRuntimeError(false);
     setShowErrorDetails(false);
+    setIsAppMounted(false);
+    setShowFixButton(false);
   };
 
   // Optimization: If inactive (tab switched), unmount heavy iframe or return null
   if (!active) return null;
 
   // Determine iframe props
-  // 1. If external URL is active and we are NOT building, use `src`.
-  // 2. Otherwise use `srcDoc` with the generated HTML.
   const srcProp = (externalUrl && !isGenerating && !isUpdating) ? externalUrl : undefined;
   const srcDocProp = srcProp ? undefined : (docString || undefined);
 
@@ -145,6 +183,19 @@ const PreviewCanvas: React.FC<PreviewCanvasProps> = ({
                 <RefreshCw size={16} />
             </button>
         </div>
+      )}
+
+      {/* Fix Preview Button Overlay (Only when not mounted and not generating) */}
+      {!isGenerating && !isUpdating && !isAppMounted && showFixButton && !externalUrl && onFixPreview && (
+          <div className="absolute top-4 left-4 z-30 animate-in fade-in zoom-in duration-300">
+              <button 
+                  onClick={onFixPreview}
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600/90 hover:bg-indigo-500 backdrop-blur-md text-white text-xs font-bold rounded-full shadow-lg border border-white/20 transition-all hover:scale-105"
+              >
+                  <Wrench size={14} className="animate-pulse" />
+                  Fix Preview
+              </button>
+          </div>
       )}
 
       {/* Deployment Status Indicator */}
