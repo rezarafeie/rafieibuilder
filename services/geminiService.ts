@@ -181,8 +181,8 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
     if (!config.apiKey) throw new Error(`API Key missing for ${config.name}.`);
     
     if (config.id === 'google') {
-        const model = config.model || 'gemini-3-pro-preview';
-        const PROXY_URL = 'https://corsproxy.io/?';
+        const model = config.model || 'gemini-3-flash-preview';
+        const PROXY_URL = 'https://corsproxy.io/?key=83a20021&url';
         const TARGET_URL = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.apiKey}`;
         
         const contents: any[] = [];
