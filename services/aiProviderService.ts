@@ -1,4 +1,3 @@
-
 import { createClient } from '@supabase/supabase-js';
 import { AIProviderConfig, AIProviderId } from '../types';
 
@@ -19,23 +18,29 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const AVAILABLE_MODELS = {
     'google': [
         'gemini-3-pro-preview',
-        'gemini-3-flash-preview',
+        'gemini-3-pro',
         'gemini-2.5-flash',
-        'gemini-2.0-flash-exp',
+        'gemini-2.0-flash',
         'gemini-1.5-pro',
-        'gemini-1.5-flash'
+        'gemini-1.5-flash',
+        'gemini-pro-preview',
+        'gemini-pro'
     ],
     'openai': [
+        'gpt-5.2',
+        'gpt-5.1',
+        'gpt-4.1',
         'gpt-4o',
         'gpt-4o-mini',
-        'o1-preview',
-        'o1-mini',
         'gpt-4-turbo',
         'gpt-4',
-        'gpt-3.5-turbo'
+        'gpt-3.5-turbo',
+        'o1-preview',
+        'o1-mini'
     ],
     'claude': [
         'claude-3-5-sonnet-20241022',
+        'claude-3-5-sonnet-20240620',
         'claude-3-5-haiku-20241022',
         'claude-3-opus-20240229',
         'claude-3-sonnet-20240229',
@@ -45,7 +50,7 @@ const AVAILABLE_MODELS = {
 
 const DEFAULT_PROVIDERS: AIProviderConfig[] = [
     { id: 'google', name: 'Google Gemini', isActive: true, isFallback: false, model: 'gemini-2.5-flash', updatedAt: Date.now() },
-    { id: 'openai', name: 'OpenAI (ChatGPT)', isActive: false, isFallback: false, model: 'gpt-4o', updatedAt: Date.now() },
+    { id: 'openai', name: 'OpenAI (ChatGPT)', isActive: false, isFallback: false, model: 'gpt-5.2', updatedAt: Date.now() },
     { id: 'claude', name: 'Anthropic Claude', isActive: false, isFallback: false, model: 'claude-3-5-sonnet-20241022', updatedAt: Date.now() }
 ];
 
@@ -79,6 +84,7 @@ export const aiProviderService = {
         return DEFAULT_PROVIDERS.map(def => {
             const existing = dbConfigs.find((c: AIProviderConfig) => c.id === def.id);
             if (existing) {
+                // Merge existing with defaults to handle cases where DB has partial data (e.g. null model)
                 return {
                     ...def,
                     ...existing,
@@ -91,6 +97,7 @@ export const aiProviderService = {
     },
 
     async getActiveConfig(): Promise<AIProviderConfig | null> {
+        // Use limit(1) instead of single() to prevent crashes if multiple rows are accidentally active
         const { data, error } = await supabase
             .from('ai_providers')
             .select('*')
@@ -139,6 +146,7 @@ export const aiProviderService = {
     },
 
     async saveConfig(config: Partial<AIProviderConfig> & { id: string }): Promise<void> {
+        // Use default name if not provided
         const defaultName = config.id === 'google' ? 'Google Gemini' : config.id === 'openai' ? 'OpenAI' : 'Claude';
 
         const payload: any = {
@@ -147,12 +155,15 @@ export const aiProviderService = {
             updated_at: new Date().toISOString()
         };
 
+        // Only add fields if they are defined to prevent overwriting existing data with nulls
         if (config.model !== undefined) payload.model = config.model;
         if (config.apiKey !== undefined) payload.api_key = config.apiKey;
         if (config.isActive !== undefined) payload.is_active = config.isActive;
         if (config.isFallback !== undefined) payload.is_fallback = config.isFallback;
 
+        // Smart Rotation Logic: If activating a provider, the previous active one becomes fallback
         if (config.isActive) {
+            // 1. Fetch currently active provider (that is not the one being saved)
             const { data: currentActive } = await supabase
                 .from('ai_providers')
                 .select('id')
@@ -162,17 +173,22 @@ export const aiProviderService = {
                 .maybeSingle();
 
             if (currentActive) {
+                console.log(`Switching active provider. Old Active (${currentActive.id}) becoming Fallback.`);
+                
+                // 2. Set old active to: active=false, fallback=true
                 await supabase
                     .from('ai_providers')
                     .update({ is_active: false, is_fallback: true })
                     .eq('id', currentActive.id);
 
+                // 3. Clear fallback from anyone else (to keep singular fallback)
                 await supabase
                     .from('ai_providers')
                     .update({ is_fallback: false })
                     .neq('id', currentActive.id)
                     .neq('id', config.id);
             } else {
+                // No existing active provider found (or re-saving same), just ensure no one else is active
                 await supabase.from('ai_providers').update({ is_active: false }).neq('id', config.id);
             }
         }

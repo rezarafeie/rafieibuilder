@@ -1,4 +1,3 @@
-
 import { AIUsageResult } from "../types";
 
 export const openaiService = {
@@ -12,29 +11,25 @@ export const openaiService = {
         
         // Use Proxy for CORS
         const PROXY_URL = 'https://corsproxy.io/?';
-        const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
+        const OPENAI_URL = 'https://api.openai.com/v1/responses';
 
-        // Organization and Project IDs (optional, but kept if user needs them)
+        // Organization and Project IDs from reference
         const ORG_ID = 'org-zhaJWr2MhEIQCCW7WAxaUe0k';
         const PROJ_ID = 'proj_WXVi3fbcro03UCUcQztqhDag';
 
-        // Standard Chat Completion Payload
-        const messages: any[] = [];
-        
+        // Construct payload according to example request provided by user
+        const payload: any = {
+            model: model,
+            input: prompt
+        };
+
+        // Pass system instructions if provided
         if (systemInstruction) {
-            messages.push({ role: "system", content: systemInstruction });
+            payload.instructions = systemInstruction;
         }
 
-        // Note: Image URLs are already enriched into the prompt text by the supervisor in cloudService.ts
-        // so we can use a simple text content approach or multi-part if strictly needed.
-        messages.push({ role: "user", content: prompt });
-
-        const payload = {
-            model: model || "gpt-4o",
-            messages: messages,
-            temperature: 0.1,
-            max_tokens: 4096
-        };
+        // Note: The /v1/responses API uses a single 'input' string. 
+        // Image URLs are already enriched into the prompt by cloudService.ts
 
         const response = await fetch(`${PROXY_URL}${encodeURIComponent(OPENAI_URL)}`, {
             method: "POST",
@@ -62,24 +57,25 @@ export const openaiService = {
 
         const data = await response.json();
         
-        // Parsing logic for Chat Completions
-        const text = data.choices?.[0]?.message?.content || "";
+        // Parsing logic strictly mapped to provided answer example
+        // Path: output[0].content[0].text
+        const text = data.output?.[0]?.content?.[0]?.text || "";
         
-        // Usage extraction
+        // Usage extraction mapping
         const usage = data.usage || {};
-        const inputTokens = usage.prompt_tokens || 0;
-        const outputTokens = usage.completion_tokens || 0;
+        const inputTokens = usage.input_tokens || 0;
+        const outputTokens = usage.output_tokens || 0;
 
-        // Pricing logic (approximate for standard models)
-        let inputPrice = 2.50; 
-        let outputPrice = 10.00;
+        // Pricing logic (approximate for custom models)
+        let inputPrice = 5.0; 
+        let outputPrice = 15.0;
         
-        if (model.includes('gpt-4o-mini')) {
-            inputPrice = 0.15;
-            outputPrice = 0.60;
-        } else if (model.includes('gpt-4o')) {
-            inputPrice = 5.00;
-            outputPrice = 15.00;
+        if (model.includes('5.2')) {
+            inputPrice = 10.0;
+            outputPrice = 30.0;
+        } else if (model.includes('4.1')) {
+            inputPrice = 2.5; 
+            outputPrice = 10.0;
         }
 
         const cost = ((inputTokens / 1_000_000) * inputPrice) + ((outputTokens / 1_000_000) * outputPrice);
