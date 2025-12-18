@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Project, Message, ViewMode, User, Suggestion, BuildState, VercelConfig } from '../types';
@@ -663,11 +662,25 @@ const ProjectBuilder: React.FC<ProjectBuilderProps> = ({ user }) => {
                 <h1 className="font-semibold text-slate-800 dark:text-gray-200 truncate max-w-[150px] md:max-w-md hidden sm:block">{project.name}</h1>
                 {isAutoDeploying && <span className="text-xs text-indigo-500 flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Auto Deploying...</span>}
             </div>
-            <div className="flex-1 flex justify-center items-center gap-4">
+            <div className="flex-1 flex justify-center items-center gap-6">
                 <div className="hidden md:flex bg-slate-100 dark:bg-slate-800 rounded-lg p-1 border border-slate-200 dark:border-slate-700">
                     <button onClick={() => setViewMode('preview')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${viewMode === 'preview' ? 'bg-white dark:bg-indigo-600 shadow-sm dark:shadow-none' : 'text-slate-500 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'}`}>{t('preview')}</button>
                     <button onClick={() => setViewMode('code')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${viewMode === 'code' ? 'bg-white dark:bg-indigo-600 shadow-sm dark:shadow-none' : 'text-slate-500 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'}`}>{t('code')}</button>
                 </div>
+
+                {viewMode === 'preview' && (
+                    <div className="hidden lg:flex bg-slate-100 dark:bg-slate-800 rounded-lg p-1 border border-slate-200 dark:border-slate-700 items-center">
+                        <button onClick={() => setDeviceMode('desktop')} className={`p-1.5 rounded-md transition-all ${deviceMode === 'desktop' ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`} title="Desktop View">
+                            <Monitor size={16} />
+                        </button>
+                        <button onClick={() => setDeviceMode('tablet')} className={`p-1.5 rounded-md transition-all ${deviceMode === 'tablet' ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`} title="Tablet View">
+                            <Tablet size={16} />
+                        </button>
+                        <button onClick={() => setDeviceMode('mobile')} className={`p-1.5 rounded-md transition-all ${deviceMode === 'mobile' ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`} title="Mobile View">
+                            <Smartphone size={16} />
+                        </button>
+                    </div>
+                )}
             </div>
             <div className="flex items-center gap-3">
                 {hasCloudProject && <button onClick={() => navigate(`/cloud/${project.id}`)} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 rounded-full text-xs font-medium hover:bg-emerald-100 dark:hover:bg-emerald-900/20 transition-colors"><Cloud size={12} fill="currentColor" /><span className="hidden lg:inline">Cloud Active</span></button>}

@@ -11,7 +11,8 @@ import {
     Clock, Calendar, FileText, ChevronRight, Save, Menu, Zap, Scale, BarChart3, Radio, Send, ToggleLeft, ToggleRight, Lock, Key, Filter,
     FileJson, MessageSquare, Eye, EyeOff, Copy, ChevronLeft, ChevronRight as ArrowRightIcon, Trash2,
     TrendingDown,
-    Cpu
+    Cpu,
+    ExternalLink
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -21,8 +22,6 @@ interface AdminPanelProps {
 
 type AdminView = 'dashboard' | 'financials' | 'users' | 'projects' | 'ai' | 'webhooks' | 'errors' | 'settings';
 
-// Helper to extract a displayable string from any error object
-// CHANGED: Parameter type changed to any to prevent unknown assignment errors in strict TS environments
 const getErrorMessage = (e: any): string => {
     if (typeof e === 'string') return e;
     if (e instanceof Error) return e.message;
@@ -63,8 +62,133 @@ const PaginationControls: React.FC<{
     );
 };
 
+const GenerationDetailsModal: React.FC<{ entry: CreditLedgerEntry; onClose: () => void }> = ({ entry, onClose }) => {
+    const [activeTab, setActiveTab] = useState<'prompts' | 'response' | 'financials'>('prompts');
+    const [copied, setCopied] = useState<string | null>(null);
+
+    const handleCopy = (text: string, label: string) => {
+        navigator.clipboard.writeText(text);
+        setCopied(label);
+        setTimeout(() => setCopied(null), 2000);
+    };
+
+    const meta = entry.meta || {};
+
+    return (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center p-4 animate-in fade-in duration-300">
+            <div className="bg-slate-900 border border-slate-700 w-full max-w-5xl h-[85vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden">
+                {/* Header */}
+                <div className="p-6 border-b border-slate-800 bg-slate-900/50 flex justify-between items-center">
+                    <div className="flex items-center gap-4">
+                        <div className="p-3 bg-indigo-500/10 rounded-2xl border border-indigo-500/20 text-indigo-400">
+                            <Brain size={24} />
+                        </div>
+                        <div>
+                            <h2 className="text-xl font-bold">Generation Inspector</h2>
+                            <div className="flex items-center gap-2 mt-1">
+                                <span className="text-xs text-slate-500 font-mono">{entry.id}</span>
+                                <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded uppercase font-bold tracking-widest">{entry.model}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <button onClick={onClose} className="p-2 hover:bg-slate-800 rounded-full text-slate-500 transition-colors"><X size={24}/></button>
+                </div>
+
+                {/* Body */}
+                <div className="flex-1 flex overflow-hidden">
+                    {/* Navigation */}
+                    <div className="w-52 border-r border-slate-800 p-4 space-y-2 shrink-0">
+                        <button onClick={() => setActiveTab('prompts')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-medium transition-all ${activeTab === 'prompts' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>Prompts</button>
+                        <button onClick={() => setActiveTab('response')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-medium transition-all ${activeTab === 'response' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>AI Response</button>
+                        <button onClick={() => setActiveTab('financials')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-medium transition-all ${activeTab === 'financials' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>Transaction Data</button>
+                    </div>
+
+                    {/* Content Area */}
+                    <div className="flex-1 overflow-y-auto p-6 bg-slate-950/50">
+                        {activeTab === 'prompts' && (
+                            <div className="space-y-8 animate-in slide-in-from-bottom-2">
+                                <section>
+                                    <div className="flex justify-between items-center mb-3">
+                                        <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest">System Instructions</h4>
+                                        <button onClick={() => handleCopy(meta.systemPrompt || '', 'sys')} className="text-[10px] text-indigo-400 hover:underline flex items-center gap-1">
+                                            {copied === 'sys' ? <Check size={10}/> : <Copy size={10}/>} {copied === 'sys' ? 'Copied' : 'Copy All'}
+                                        </button>
+                                    </div>
+                                    <pre className="p-4 bg-slate-900 border border-slate-800 rounded-2xl text-xs font-mono text-slate-300 leading-relaxed whitespace-pre-wrap overflow-x-auto min-h-[100px]">
+                                        {meta.systemPrompt || 'No instructions captured.'}
+                                    </pre>
+                                </section>
+                                <section>
+                                    <div className="flex justify-between items-center mb-3">
+                                        <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest">User Request / Step Context</h4>
+                                        <button onClick={() => handleCopy(meta.userPrompt || '', 'user')} className="text-[10px] text-indigo-400 hover:underline flex items-center gap-1">
+                                            {copied === 'user' ? <Check size={10}/> : <Copy size={10}/>} {copied === 'user' ? 'Copied' : 'Copy All'}
+                                        </button>
+                                    </div>
+                                    <pre className="p-4 bg-slate-900 border border-slate-800 rounded-2xl text-xs font-mono text-indigo-300 leading-relaxed whitespace-pre-wrap overflow-x-auto min-h-[100px]">
+                                        {meta.userPrompt || 'No prompt captured.'}
+                                    </pre>
+                                </section>
+                            </div>
+                        )}
+
+                        {activeTab === 'response' && (
+                            <div className="h-full flex flex-col animate-in slide-in-from-bottom-2">
+                                <div className="flex justify-between items-center mb-3">
+                                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Raw Output</h4>
+                                    <button onClick={() => handleCopy(meta.aiResponse || '', 'resp')} className="text-[10px] text-indigo-400 hover:underline flex items-center gap-1">
+                                        {copied === 'resp' ? <Check size={10}/> : <Copy size={10}/>} {copied === 'resp' ? 'Copied' : 'Copy All'}
+                                    </button>
+                                </div>
+                                <pre className="flex-1 p-6 bg-slate-900 border border-slate-800 rounded-2xl text-xs font-mono text-emerald-400 leading-relaxed whitespace-pre-wrap overflow-auto">
+                                    {meta.aiResponse || 'No response captured.'}
+                                </pre>
+                            </div>
+                        )}
+
+                        {activeTab === 'financials' && (
+                            <div className="space-y-6 animate-in slide-in-from-bottom-2">
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800">
+                                        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Input Tokens</div>
+                                        <div className="text-xl font-bold">{entry.inputTokens.toLocaleString()}</div>
+                                    </div>
+                                    <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800">
+                                        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Output Tokens</div>
+                                        <div className="text-xl font-bold">{entry.outputTokens.toLocaleString()}</div>
+                                    </div>
+                                    <div className="bg-red-500/5 p-4 rounded-2xl border border-red-500/20">
+                                        <div className="text-[10px] text-red-400/70 font-bold uppercase tracking-widest mb-1">Raw API Cost</div>
+                                        <div className="text-xl font-bold text-red-400">${entry.rawCostUsd.toFixed(6)}</div>
+                                    </div>
+                                    <div className="bg-emerald-500/5 p-4 rounded-2xl border border-emerald-500/20">
+                                        <div className="text-[10px] text-emerald-400/70 font-bold uppercase tracking-widest mb-1">User Charged</div>
+                                        <div className="text-xl font-bold text-emerald-400">{entry.creditsDeducted.toFixed(4)} CR</div>
+                                    </div>
+                                </div>
+                                
+                                <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800">
+                                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">Metadata Context</h4>
+                                    <div className="grid grid-cols-2 gap-y-4 text-sm">
+                                        <div className="text-slate-500">Operation Type</div><div className="text-white font-mono">{entry.operationType}</div>
+                                        <div className="text-slate-500">Timestamp</div><div className="text-white">{new Date(entry.createdAt).toLocaleString()}</div>
+                                        <div className="text-slate-500">Project ID</div><div className="text-indigo-400 font-mono flex items-center gap-2">{entry.projectId || 'N/A'} {entry.projectId && <ExternalLink size={12}/>}</div>
+                                        <div className="text-slate-500">User ID</div><div className="text-slate-300 font-mono truncate">{entry.userId}</div>
+                                        <div className="text-slate-500">Profit Margin</div><div className="text-slate-300">{entry.profitMargin}%</div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
     const [view, setView] = useState<AdminView>('dashboard');
+    const [aiSubView, setAiSubView] = useState<'config' | 'logs'>('config');
     const [projects, setProjects] = useState<Project[]>([]);
     const [allUsers, setAllUsers] = useState<any[]>([]);
     const [stats, setStats] = useState<AdminMetric[]>([]);
@@ -90,6 +214,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
         totalRequestCount: 0
     });
     const [ledger, setLedger] = useState<CreditLedgerEntry[]>([]);
+    const [selectedGeneration, setSelectedGeneration] = useState<CreditLedgerEntry | null>(null);
     
     // Users
     const [targetUser, setTargetUser] = useState<any | null>(null);
@@ -113,11 +238,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
     useEffect(() => {
         setCurrentPage(1);
         setDataError(null);
-    }, [view]);
+    }, [view, aiSubView]);
 
     useEffect(() => {
         loadViewData();
-    }, [view, currentPage]);
+    }, [view, aiSubView, currentPage]);
 
     const loadViewData = async () => {
         setIsLoading(true);
@@ -150,8 +275,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                 setWebhookLogs(data);
                 setTotalItems(count);
             } else if (view === 'ai') {
-                const configs = await aiProviderService.getAllConfigs();
-                setAiConfigs(configs);
+                if (aiSubView === 'config') {
+                    const configs = await aiProviderService.getAllConfigs();
+                    setAiConfigs(configs);
+                } else {
+                    const { data, count } = await cloudService.getLedger(currentPage, ITEMS_PER_PAGE);
+                    setLedger(data);
+                    setTotalItems(count);
+                }
             } else if (view === 'settings') {
                 const dbSettings = await cloudService.getSystemSettings(Object.values(PROMPT_KEYS));
                 const loaded: Record<string, string> = {};
@@ -234,6 +365,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
 
     return (
         <div className="fixed inset-0 bg-slate-950 text-white flex flex-col z-[60] font-sans">
+            {selectedGeneration && <GenerationDetailsModal entry={selectedGeneration} onClose={() => setSelectedGeneration(null)} />}
+            
             <header className="h-16 border-b border-slate-800 flex items-center justify-between px-6 bg-slate-900 shrink-0">
                 <div className="flex items-center gap-4">
                     <Shield className="text-indigo-500" size={24} />
@@ -409,101 +542,145 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                     )}
 
                     {view === 'ai' && (
-                        <div className="max-w-4xl space-y-6">
-                            <div className="flex justify-between items-end mb-4">
-                                <div>
-                                    <h2 className="text-2xl font-bold">AI Provider Routing</h2>
-                                    <p className="text-slate-400 text-sm">Configure primary and failover models for the generator.</p>
+                        <div className="space-y-6">
+                            <div className="flex flex-col gap-2">
+                                <h2 className="text-2xl font-bold">AI Provider Center</h2>
+                                <div className="flex gap-2 p-1 bg-slate-900 border border-slate-800 rounded-xl w-fit">
+                                    <button onClick={() => setAiSubView('config')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${aiSubView === 'config' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Provider Config</button>
+                                    <button onClick={() => setAiSubView('logs')} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${aiSubView === 'logs' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Generation Logs</button>
                                 </div>
                             </div>
-                            
-                            <div className="grid gap-6">
-                                {aiConfigs.map(config => {
-                                    const isEditing = editingProviderId === config.id;
-                                    return (
-                                        <div key={config.id} className={`bg-slate-900 border rounded-2xl p-6 transition-all ${config.isActive ? 'border-indigo-500 ring-1 ring-indigo-500/50' : 'border-slate-800'}`}>
-                                            <div className="flex justify-between items-start mb-6">
-                                                <div className="flex items-center gap-4">
-                                                    <div className={`p-3 rounded-xl ${config.isActive ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-400'}`}>
-                                                        <Brain size={24} />
-                                                    </div>
-                                                    <div>
-                                                        <h3 className="text-lg font-bold">{config.name}</h3>
-                                                        <div className="flex gap-2 mt-1">
-                                                            {config.isActive && <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded font-bold uppercase">Primary Active</span>}
-                                                            {config.isFallback && <span className="text-[10px] bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded font-bold uppercase">Fallback Mode</span>}
+
+                            {aiSubView === 'config' ? (
+                                <div className="grid gap-6 animate-in fade-in slide-in-from-bottom-2">
+                                    {aiConfigs.map(config => {
+                                        const isEditing = editingProviderId === config.id;
+                                        return (
+                                            <div key={config.id} className={`bg-slate-900 border rounded-2xl p-6 transition-all ${config.isActive ? 'border-indigo-500 ring-1 ring-indigo-500/50' : 'border-slate-800'}`}>
+                                                <div className="flex justify-between items-start mb-6">
+                                                    <div className="flex items-center gap-4">
+                                                        <div className={`p-3 rounded-xl ${config.isActive ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-400'}`}>
+                                                            <Brain size={24} />
+                                                        </div>
+                                                        <div>
+                                                            <h3 className="text-lg font-bold">{config.name}</h3>
+                                                            <div className="flex gap-2 mt-1">
+                                                                {config.isActive && <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded font-bold uppercase">Primary Active</span>}
+                                                                {config.isFallback && <span className="text-[10px] bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded font-bold uppercase">Fallback Mode</span>}
+                                                            </div>
                                                         </div>
                                                     </div>
-                                                </div>
-                                                <button 
-                                                    onClick={() => {
-                                                        if (isEditing) handleSaveAI(config.id, config.isActive, config.isFallback);
-                                                        else {
-                                                            setEditingProviderId(config.id);
-                                                            setTempModel(config.model || '');
-                                                            setTempApiKey('');
-                                                        }
-                                                    }}
-                                                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${isEditing ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-white hover:bg-slate-700'}`}
-                                                >
-                                                    {isSavingAI ? <Loader2 size={16} className="animate-spin" /> : isEditing ? 'Save Changes' : 'Edit Config'}
-                                                </button>
-                                            </div>
-
-                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                                <div className="space-y-2">
-                                                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Model Identifier</label>
-                                                    {isEditing ? (
-                                                        <input 
-                                                            type="text" 
-                                                            value={tempModel} 
-                                                            onChange={e => setTempModel(e.target.value)}
-                                                            className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm font-mono focus:border-indigo-500 outline-none"
-                                                            placeholder="e.g. gemini-2.5-flash"
-                                                        />
-                                                    ) : (
-                                                        <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm font-mono text-slate-300">{config.model}</div>
-                                                    )}
-                                                </div>
-                                                <div className="space-y-2">
-                                                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">API Secret Key</label>
-                                                    {isEditing ? (
-                                                        <input 
-                                                            type="password" 
-                                                            value={tempApiKey} 
-                                                            onChange={e => setTempApiKey(e.target.value)}
-                                                            className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm font-mono focus:border-indigo-500 outline-none"
-                                                            placeholder="Paste new key (leave empty to keep current)"
-                                                        />
-                                                    ) : (
-                                                        <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm font-mono text-slate-500 flex justify-between items-center">
-                                                            <span>••••••••••••••••••••••••</span>
-                                                            <Lock size={14} className="opacity-50" />
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </div>
-
-                                            {isEditing && (
-                                                <div className="mt-6 pt-6 border-t border-slate-800 flex gap-4">
                                                     <button 
-                                                        onClick={() => handleSaveAI(config.id, true, false)}
-                                                        className="flex-1 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 p-3 rounded-xl text-xs font-bold transition-all"
+                                                        onClick={() => {
+                                                            if (isEditing) handleSaveAI(config.id, config.isActive, config.isFallback);
+                                                            else {
+                                                                setEditingProviderId(config.id);
+                                                                setTempModel(config.model || '');
+                                                                setTempApiKey('');
+                                                            }
+                                                        }}
+                                                        className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${isEditing ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-white hover:bg-slate-700'}`}
                                                     >
-                                                        Set as Primary Active
-                                                    </button>
-                                                    <button 
-                                                        onClick={() => handleSaveAI(config.id, false, true)}
-                                                        className="flex-1 bg-amber-600/10 hover:bg-amber-600/20 text-amber-400 border border-amber-500/30 p-3 rounded-xl text-xs font-bold transition-all"
-                                                    >
-                                                        Set as Fallback
+                                                        {isSavingAI ? <Loader2 size={16} className="animate-spin" /> : isEditing ? 'Save Changes' : 'Edit Config'}
                                                     </button>
                                                 </div>
-                                            )}
-                                        </div>
-                                    );
-                                })}
-                            </div>
+
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                                    <div className="space-y-2">
+                                                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Model Identifier</label>
+                                                        {isEditing ? (
+                                                            <input 
+                                                                type="text" 
+                                                                value={tempModel} 
+                                                                onChange={e => setTempModel(e.target.value)}
+                                                                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm font-mono focus:border-indigo-500 outline-none"
+                                                                placeholder="e.g. gemini-2.5-flash"
+                                                            />
+                                                        ) : (
+                                                            <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm font-mono text-slate-300">{config.model}</div>
+                                                        )}
+                                                    </div>
+                                                    <div className="space-y-2">
+                                                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">API Secret Key</label>
+                                                        {isEditing ? (
+                                                            <input 
+                                                                type="password" 
+                                                                value={tempApiKey} 
+                                                                onChange={e => setTempApiKey(e.target.value)}
+                                                                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm font-mono focus:border-indigo-500 outline-none"
+                                                                placeholder="Paste new key (leave empty to keep current)"
+                                                            />
+                                                        ) : (
+                                                            <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm font-mono text-slate-500 flex justify-between items-center">
+                                                                <span>••••••••••••••••••••••••</span>
+                                                                <Lock size={14} className="opacity-50" />
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+
+                                                {isEditing && (
+                                                    <div className="mt-6 pt-6 border-t border-slate-800 flex gap-4">
+                                                        <button 
+                                                            onClick={() => handleSaveAI(config.id, true, false)}
+                                                            className="flex-1 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 p-3 rounded-xl text-xs font-bold transition-all"
+                                                        >
+                                                            Set as Primary Active
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => handleSaveAI(config.id, false, true)}
+                                                            className="flex-1 bg-amber-600/10 hover:bg-amber-600/20 text-amber-400 border border-amber-500/30 p-3 rounded-xl text-xs font-bold transition-all"
+                                                        >
+                                                            Set as Fallback
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-2">
+                                    <div className="p-4 bg-slate-900 border-b border-slate-800 flex justify-between items-center">
+                                        <h3 className="font-bold">Historical Generation Logs</h3>
+                                        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Context Persisted for All Events</div>
+                                    </div>
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-left text-sm">
+                                            <thead>
+                                                <tr className="bg-slate-800/50 text-slate-400 border-b border-slate-800">
+                                                    <th className="px-6 py-4">Time</th>
+                                                    <th className="px-6 py-4">Model</th>
+                                                    <th className="px-6 py-4">Operation</th>
+                                                    <th className="px-6 py-4">Tokens (I/O)</th>
+                                                    <th className="px-6 py-4">Details</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-800 font-mono text-[11px]">
+                                                {ledger.map(entry => (
+                                                    <tr key={entry.id} className="hover:bg-slate-800/30 transition-colors">
+                                                        <td className="px-6 py-4 text-slate-500">{new Date(entry.createdAt).toLocaleString()}</td>
+                                                        <td className="px-6 py-4">
+                                                            <span className="text-slate-300 font-bold">{entry.model}</span>
+                                                        </td>
+                                                        <td className="px-6 py-4 text-indigo-400">{entry.operationType}</td>
+                                                        <td className="px-6 py-4 text-slate-500">{entry.inputTokens} / {entry.outputTokens}</td>
+                                                        <td className="px-6 py-4">
+                                                            <button 
+                                                                onClick={() => setSelectedGeneration(entry)}
+                                                                className="flex items-center gap-2 bg-indigo-600/10 hover:bg-indigo-600 text-indigo-400 hover:text-white px-3 py-1.5 rounded-lg border border-indigo-500/20 transition-all font-bold text-[10px] uppercase"
+                                                            >
+                                                                <Search size={12}/> Inspect
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <PaginationControls currentPage={currentPage} totalItems={totalItems} itemsPerPage={ITEMS_PER_PAGE} onPageChange={setCurrentPage} />
+                                </div>
+                            )}
                         </div>
                     )}
 
@@ -709,7 +886,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                         setIsSavingPrompts(true);
                                         try {
                                             for (const [key, value] of Object.entries(prompts)) {
-                                                // FIXED: Explicitly cast value to string to ensure compatibility with setSystemSetting
                                                 await cloudService.setSystemSetting(key, String(value));
                                             }
                                             alert("Global prompts updated.");
@@ -733,7 +909,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ user, onClose }) => {
                                             <span className="text-[10px] text-slate-500 font-mono">{key}</span>
                                         </div>
                                         <textarea
-                                            // FIXED: Use String(value) to ensure compatibility with textarea's value prop
                                             value={String(value)}
                                             onChange={e => setPrompts({ ...prompts, [key]: e.target.value })}
                                             className="w-full h-48 bg-transparent p-6 font-mono text-xs leading-relaxed text-slate-300 focus:outline-none resize-y"

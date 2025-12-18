@@ -236,17 +236,32 @@ const executeAIRequest = async (config: AIProviderConfig, prompt: string, system
     throw new Error(`Unknown provider: ${config.id}`);
 };
 
-const robustGenerate = async (prompt: string, systemInstruction: string, projectId: string, userId: string, opType: string, images: string[] = [], options?: { messageId?: string }): Promise<{text: string, usage: AIUsageResult}> => {
+const robustGenerate = async (prompt: string, systemInstruction: string, projectId: string, userId: string, opType: string, images: string[] = [], options?: { messageId?: string, meta?: any }): Promise<{text: string, usage: AIUsageResult}> => {
     let activeConfig = await getActiveProvider();
     try {
         const result = await executeAIRequest(activeConfig, prompt, systemInstruction, images);
-        billingService.chargeUser(userId, projectId, opType, result.usage.model, { promptTokenCount: result.usage.promptTokens, candidatesTokenCount: result.usage.completionTokens, costUsd: result.usage.costUsd }, { messageId: options?.messageId }).catch(console.error);
+        const ledgerMeta = { 
+            messageId: options?.messageId, 
+            systemPrompt: systemInstruction,
+            userPrompt: prompt,
+            aiResponse: result.text,
+            ...options?.meta 
+        };
+        billingService.chargeUser(userId, projectId, opType, result.usage.model, { promptTokenCount: result.usage.promptTokens, candidatesTokenCount: result.usage.completionTokens, costUsd: result.usage.costUsd }, ledgerMeta).catch(console.error);
         return result;
     } catch (error: any) {
         const fallback = await aiProviderService.getFallbackConfig();
         if (fallback && fallback.apiKey && fallback.id !== activeConfig.id) {
             const result = await executeAIRequest(fallback, prompt, systemInstruction, images);
-            billingService.chargeUser(userId, projectId, `${opType}_fallback`, result.usage.model, { promptTokenCount: result.usage.promptTokens, candidatesTokenCount: result.usage.completionTokens, costUsd: result.usage.costUsd }, { messageId: options?.messageId, note: "Fallback" }).catch(console.error);
+            const ledgerMeta = { 
+                messageId: options?.messageId, 
+                systemPrompt: systemInstruction,
+                userPrompt: prompt,
+                aiResponse: result.text,
+                note: "Fallback",
+                ...options?.meta 
+            };
+            billingService.chargeUser(userId, projectId, `${opType}_fallback`, result.usage.model, { promptTokenCount: result.usage.promptTokens, candidatesTokenCount: result.usage.completionTokens, costUsd: result.usage.costUsd }, ledgerMeta).catch(console.error);
             return result;
         }
         throw error;
@@ -376,6 +391,15 @@ export class GenerationSupervisor {
                 await this.callbacks.onPhaseComplete(i);
                 await this.callbacks.onBuildMessage(`phase_${i}`, { id: phaseMsgId, status: 'completed' });
             }
+            
+            // Final Completion Narration
+            await this.callbacks.onBuildMessage('final_completion', { 
+                type: 'assistant_response', 
+                content: this.lang === 'fa' ? "ساخت پروژه شما با موفقیت به پایان رسید! اکنون می‌توانید پیش‌نمایش آن را مشاهده کرده و آن را در وب منتشر کنید." : "The project build is now complete! You can now preview your application in the canvas and publish it to the web whenever you're ready.", 
+                status: 'completed',
+                icon: 'sparkles'
+            });
+
             await this.callbacks.onSuccess(this.project.code, "Build complete.", { score: 100, passed: true, issues: [], previewHealth: 'healthy', routesDetected: [] }, { files: this.accumulatedFiles });
         } catch (e: any) {
             if (e.message !== "ABORTED") await this.callbacks.onFinalError(e.message || "An unexpected error occurred.");
