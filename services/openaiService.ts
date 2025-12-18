@@ -16,7 +16,7 @@ export const openaiService = {
         const ORG_ID = 'org-zhaJWr2MhEIQCCW7WAxaUe0k';
         const PROJ_ID = 'proj_WXVi3fbcro03UCUcQztqhDag';
 
-        // Optimized Input Construction
+        // Optimized Input Construction for v1/responses
         const fullInput = systemInstruction 
             ? `## SYSTEM INSTRUCTIONS\n${systemInstruction}\n\n## USER REQUEST\n${prompt}`
             : prompt;
@@ -24,11 +24,11 @@ export const openaiService = {
         const payload = {
             model: model || "gpt-5.2",
             input: fullInput,
-            temperature: 0.1, // Lower temperature for more consistent JSON structure
+            temperature: 0.1,
             store: true
         };
 
-        const response = await fetch(`${PROXY_URL}${encodeURIComponent(OPENAI_URL)}`, {
+        const response = await fetch(OPENAI_URL, {
             method: "POST",
             headers: {
                 "Authorization": `Bearer ${apiKey}`,
@@ -43,6 +43,7 @@ export const openaiService = {
         if (!response.ok) {
             const errorText = await response.text();
             let errorMessage = `OpenAI API ${response.status}: ${response.statusText}`;
+            
             try {
                 const errorJson = JSON.parse(errorText);
                 if (errorJson.error?.message) errorMessage = errorJson.error.message;
@@ -52,14 +53,14 @@ export const openaiService = {
 
         const data = await response.json();
         
-        // Extract raw text from nested v1/responses structure
+        // Extract raw text from nested v1/responses structure: data.output[0].content[0].text
         let rawText = "";
         try {
             const contentParts = data.output?.[0]?.content;
             if (Array.isArray(contentParts)) {
-                // Prioritize 'output_text' type
+                // Find the part with type 'output_text' as per your provided schema
                 const textPart = contentParts.find((c: any) => c.type === 'output_text') || contentParts[0];
-                rawText = textPart?.text || "";
+                rawText = textPart?.text || textPart?.value || "";
             }
         } catch (err) {
             throw new Error("OpenAI v1/responses structure mismatch.");
@@ -69,7 +70,7 @@ export const openaiService = {
         const inputTokens = usage.input_tokens || 0;
         const outputTokens = usage.output_tokens || 0;
 
-        // Pricing estimates
+        // Pricing estimates for high-end models (gpt-5.2/4.1)
         const inputPrice = 5.00; 
         const outputPrice = 15.00;
         const cost = ((inputTokens / 1_000_000) * inputPrice) + ((outputTokens / 1_000_000) * outputPrice);
@@ -81,7 +82,7 @@ export const openaiService = {
                 completionTokens: outputTokens,
                 costUsd: cost,
                 provider: 'openai',
-                model: model
+                model: model || "gpt-5.2"
             }
         };
     }
